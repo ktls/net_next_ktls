@@ -376,6 +376,8 @@ VARIABLE_OFFSET = 16*8
 
         mov     arg6, %r10                      # r10 = AAD
         mov     arg7, %r12                      # r12 = aadLen
+        add     $3, %r12
+        and     $~3, %r12
 
 
         mov     %r12, %r11
@@ -1635,6 +1637,8 @@ ENDPROC(aesni_gcm_dec_avx_gen2)
 
         mov     arg6, %r10                       # r10 = AAD
         mov     arg7, %r12                       # r12 = aadLen
+        add     $3, %r12
+        and     $~3, %r12
 
 
         mov     %r12, %r11
