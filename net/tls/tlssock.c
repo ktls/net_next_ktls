@@ -310,6 +310,8 @@ static void tls_queue(struct strparser *strp, struct sk_buff *skb)
 	tls_rx_msg(skb)->decrypted = 0;
 	bh_lock_sock(&tsk->sk);
 
+	tsk->recv_len += rxm->full_len - TLS_OVERHEAD(tsk);
+
 	ret = sock_queue_rcv_skb((struct sock *)tsk, skb);
 	if (ret < 0) {
 		/* skb receive queue is full. Apply backpressure on
@@ -1401,6 +1403,63 @@ static struct sk_buff *tls_wait_data(struct tls_sock *tsk, int flags,
 }
 
 
+static int tls_read_sock(struct sock *sk, read_descriptor_t *desc,
+			sk_read_actor_t recv_actor) {
+	struct strp_rx_msg *rxm;
+	struct sk_buff *skb = NULL;
+	struct tls_sock *tsk;
+	int err = 0;
+	int used;
+	int copied = 0;
+
+	tsk = tls_sk(sk);
+
+	tls_dequeue_held_data(tsk);
+
+	err = -tsk->sk.sk_err;
+	if (err)
+		goto recv_end;
+
+	while((skb = tls_wait_data(tsk, MSG_DONTWAIT, 0, &err)) != NULL) {
+		rxm = strp_rx_msg(skb);
+
+		if (!tls_rx_msg(skb)->decrypted) {
+			err = decrypt_skb(tsk, skb);
+			if (err == -EINPROGRESS) {
+				err = 0;
+				skb = NULL;
+				goto recv_end;
+			}
+
+			if (err < 0) {
+				tls_err_abort(tsk);
+				goto recv_end;
+			}
+		}
+
+		used = recv_actor(desc, skb, 0, rxm->full_len);
+		copied += used;
+		tsk->recv_len -= used;
+
+		if (used < rxm->full_len) {
+			rxm->full_len -= used;
+			rxm->offset += used;
+			break;
+		} else {
+			skb_unlink(skb, &tsk->sk.sk_receive_queue);
+			kfree_skb(skb);
+		}
+		tls_dequeue_held_data(tsk);
+		if (!desc->count)
+			break;
+	}
+
+recv_end:
+	if (err)
+		BUG_ON(err > 0);
+	return err ?: copied;
+}
+
 static int tls_recvmsg(struct socket *sock,
 		       struct msghdr *msg,
 		       size_t len,
@@ -1457,6 +1516,7 @@ static int tls_recvmsg(struct socket *sock,
 		copied += chunk;
 		len -= chunk;
 		if (likely(!(flags & MSG_PEEK))) {
+			tsk->recv_len -= chunk;
 			if (chunk < rxm->full_len) {
 				rxm->offset += chunk;
 				rxm->full_len -= chunk;
@@ -1517,6 +1577,7 @@ again:
 	if (err < 0)
 		goto recv_end;
 	copied = rxm->full_len;
+	tsk->recv_len -= rxm->full_len;
 	if (copied > len)
 		msg->msg_flags |= MSG_TRUNC;
 	if (likely(!(flags & MSG_PEEK))) {
@@ -1654,6 +1715,15 @@ out:
 	return ret;
 }
 
+static int tls_peek_len(struct socket *sock)
+{
+	struct tls_sock *tsk;
+
+	tsk = tls_sk(sock->sk);
+
+	return tsk->recv_len;
+}
+
 
 static int tls_release(struct socket *sock)
 {
@@ -1687,6 +1757,8 @@ static const struct proto_ops tls_stream_ops = {
 	.sendmsg	=	tls_sendmsg,
 	.recvmsg	=	tls_recvmsg,
 	.release	=	tls_release,
+	.read_sock      =       tls_read_sock,
+	.peek_len       =       tls_peek_len,
 };
 
 static const struct proto_ops tls_dgram_ops = {
@@ -1709,6 +1781,8 @@ static const struct proto_ops tls_dgram_ops = {
 	.sendmsg	=	tls_sendmsg,
 	.recvmsg	=	dtls_recvmsg,
 	.release	=	tls_release,
+	.read_sock      =       tls_read_sock,
+	.peek_len       =       tls_peek_len,
 };
 
 static void tls_sock_destruct(struct sock *sk)
@@ -1821,6 +1895,7 @@ static int tls_create(struct net *net,
 
 	tsk->pages_send = NULL;
 	tsk->unsent = 0;
+	tsk->recv_len = 0;
 
 	tsk->dtls_window.have_recv = 0;
 

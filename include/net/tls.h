@@ -184,6 +184,7 @@ struct tls_sock {
 	struct work_struct recv_work;
 	void (*saved_sk_data_ready)(struct sock *sk);
 	void (*saved_sk_write_space)(struct sock *sk);
+	size_t recv_len;
 
 	/* our cipher type and its crypto API representation (e.g. "gcm(aes)")
 	 */
