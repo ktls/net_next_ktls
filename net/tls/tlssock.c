@@ -1591,6 +1591,138 @@ recv_end:
 	return ret;
 }
 
+static ssize_t tls_sendpage(struct socket *sock, struct page *page,
+			    int offset, size_t size, int flags)
+{
+	int ret = 0, i;
+	struct sock *sk = sock->sk;
+	long timeo = sock_sndtimeo(sk, flags & MSG_DONTWAIT);
+	struct tls_sock *tsk;
+	bool eor;
+	struct sk_buff *skb = NULL;
+	size_t queued = 0;
+
+	if (flags & MSG_SENDPAGE_NOTLAST)
+		flags |= MSG_MORE;
+
+	/* No MSG_EOR from splice, only look at MSG_MORE */
+	eor = !(flags & MSG_MORE);
+
+	tsk = tls_sk(sk);
+	lock_sock(sk);
+
+	if (!TLS_SEND_READY(tsk)) {
+		ret = -EBADMSG;
+		goto sendpage_end;
+	}
+
+	if (flags & MSG_OOB) {
+		ret = -ENOTSUPP;
+		goto sendpage_end;
+	}
+	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
+
+	/* Call the sk_stream functions to manage the sndbuf mem. */
+	while (size > 0) {
+		size_t send_size = min(size, TLS_MAX_PAYLOAD_SIZE);
+
+		if (!sk_stream_memory_free(sk) ||
+		    (tsk->unsent + send_size > TLS_MAX_PAYLOAD_SIZE)) {
+			ret = tls_push(tsk);
+			if (ret)
+				goto sendpage_end;
+			set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+			ret = sk_stream_wait_memory(sk, &timeo);
+			if (ret)
+				goto sendpage_end;
+		}
+
+		if (sk->sk_err)
+			goto sendpage_end;
+
+		skb = tcp_write_queue_tail(sk);
+		if (skb) {
+			i = skb_shinfo(skb)->nr_frags;
+
+			if (skb_can_coalesce(skb, i, page, offset)) {
+				skb_frag_size_add(
+					&skb_shinfo(skb)->frags[i - 1],
+					send_size);
+				skb_shinfo(skb)->tx_flags |= SKBTX_SHARED_FRAG;
+				goto coalesced;
+			}
+
+			if (i >= ALG_MAX_PAGES) {
+				struct sk_buff *tskb;
+
+				tskb = alloc_skb(0, sk->sk_allocation);
+				while (!tskb) {
+					ret = tls_push(tsk);
+					if (ret)
+						goto sendpage_end;
+					set_bit(SOCK_NOSPACE,
+						&sk->sk_socket->flags);
+					ret = sk_stream_wait_memory(sk, &timeo);
+					if (ret)
+						goto sendpage_end;
+
+					tskb = alloc_skb(0, sk->sk_allocation);
+				}
+
+				if (skb)
+					skb->next = tskb;
+				else
+					__skb_queue_tail(&sk->sk_write_queue,
+							 tskb);
+				skb = tskb;
+				i = 0;
+			}
+		} else {
+			skb = alloc_skb(0, sk->sk_allocation);
+			__skb_queue_tail(&sk->sk_write_queue, skb);
+			i = 0;
+		}
+
+		get_page(page);
+		skb_fill_page_desc(skb, i, page, offset, send_size);
+		skb_shinfo(skb)->tx_flags |= SKBTX_SHARED_FRAG;
+
+coalesced:
+		skb->len += send_size;
+		skb->data_len += send_size;
+		skb->truesize += send_size;
+		sk->sk_wmem_queued += send_size;
+		sk_mem_charge(sk, send_size);
+		tsk->unsent += send_size;
+		queued += send_size;
+		offset += queued;
+		size -= send_size;
+
+		if (eor || tsk->unsent >= TLS_MAX_PAYLOAD_SIZE) {
+			ret = tls_push(tsk);
+			if (ret)
+				goto sendpage_end;
+		}
+	}
+
+	if (eor || tsk->unsent >= TLS_MAX_PAYLOAD_SIZE)
+		ret = tls_push(tsk);
+
+sendpage_end:
+	ret = sk_stream_error(sk, flags, ret);
+
+	if (ret < 0)
+		ret = sk_stream_error(sk, flags, ret);
+
+	/* make sure we wake any epoll edge trigger waiter */
+	if (unlikely(skb_queue_len(&sk->sk_write_queue) == 0 && ret == -EAGAIN))
+		sk->sk_write_space(sk);
+
+	release_sock(sk);
+
+	return ret < 0 ? ret : queued;
+}
+
 static int tls_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 {
 	int ret;
@@ -1756,6 +1888,7 @@ static const struct proto_ops tls_stream_ops = {
 	.getsockopt	=	tls_getsockopt,
 	.sendmsg	=	tls_sendmsg,
 	.recvmsg	=	tls_recvmsg,
+	.sendpage	=	tls_sendpage,
 	.release	=	tls_release,
 	.read_sock      =       tls_read_sock,
 	.peek_len       =       tls_peek_len,
@@ -1780,6 +1913,7 @@ static const struct proto_ops tls_dgram_ops = {
 	.getsockopt	=	tls_getsockopt,
 	.sendmsg	=	tls_sendmsg,
 	.recvmsg	=	dtls_recvmsg,
+	.sendpage	=	tls_sendpage,
 	.release	=	tls_release,
 	.read_sock      =       tls_read_sock,
 	.peek_len       =       tls_peek_len,
