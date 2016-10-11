@@ -1,0 +1,11 @@
+
+config AF_TLS
+	tristate "TLS sockets"
+	depends on INET
+	select BPF_SYSCALL
+	select CRYPTO_AEAD
+	select CRYPTO_GCM
+	---help---
+	  AF_TLS provides a TLS socket type available from userspace.  Reduces
+	  the number of copies necessary to send (D)TLS data over TCP / UDP
+	  sockets.

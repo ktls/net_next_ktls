@@ -3531,7 +3531,10 @@ __skb_to_sgvec(struct sk_buff *skb, struct scatterlist *sg, int offset, int len)
 		}
 		start = end;
 	}
-	BUG_ON(len);
+	if (len) {
+		printk("Didn't copy %i bytes full skb %i\n", len, skb->len);
+		BUG_ON(len);
+	}
 	return elt;
 }
 
