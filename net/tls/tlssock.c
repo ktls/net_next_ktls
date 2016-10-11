@@ -1591,6 +1591,67 @@ recv_end:
 	return ret;
 }
 
+static ssize_t tls_splice_read(struct socket *sock,  loff_t *ppos,
+			       struct pipe_inode_info *pipe,
+			       size_t len, unsigned int flags)
+{
+	ssize_t copied = 0;
+	long timeo;
+	struct tls_sock *tsk;
+	struct strp_rx_msg *rxm;
+	int ret = 0;
+	struct sk_buff *skb;
+	int chunk;
+	int err = 0;
+	struct sock *sk = sock->sk;
+
+	tsk = tls_sk(sk);
+	lock_sock(sk);
+
+	if (!TLS_RECV_READY(tsk)) {
+		err = -EBADMSG;
+		goto splice_read_end;
+	}
+
+	timeo = sock_rcvtimeo(&tsk->sk, flags & MSG_DONTWAIT);
+
+again:
+	tls_dequeue_held_data(tsk);
+	skb = tls_wait_data(tsk, flags, timeo, &err);
+	if (!skb)
+		goto splice_read_end;
+
+	rxm = strp_rx_msg(skb);
+	/* It is possible that the message is already decrypted if the
+	 * last call only read part of the message
+	 */
+	if (!tls_rx_msg(skb)->decrypted) {
+		err = decrypt_skb(tsk, skb);
+		if (err == -EINPROGRESS)
+			goto again;
+
+		if (err < 0) {
+			tls_err_abort(tsk);
+			goto splice_read_end;
+		}
+		tls_rx_msg(skb)->decrypted = 1;
+	}
+	chunk = min_t(unsigned int, rxm->full_len, len);
+	copied = skb_splice_bits(skb, sk, rxm->offset, pipe, chunk,
+				 flags);
+	if (ret < 0)
+		goto splice_read_end;
+
+	rxm->offset += copied;
+	rxm->full_len -= copied;
+	tsk->recv_len -= copied;
+
+splice_read_end:
+	release_sock(sk);
+	ret = (copied) ? copied : err;
+	return ret;
+}
+
 static ssize_t tls_sendpage(struct socket *sock, struct page *page,
 			    int offset, size_t size, int flags)
 {
@@ -1890,6 +1951,7 @@ static const struct proto_ops tls_stream_ops = {
 	.recvmsg	=	tls_recvmsg,
 	.sendpage	=	tls_sendpage,
 	.release	=	tls_release,
+	.splice_read    =	tls_splice_read,
 	.read_sock      =       tls_read_sock,
 	.peek_len       =       tls_peek_len,
 };
@@ -1915,6 +1977,7 @@ static const struct proto_ops tls_dgram_ops = {
 	.recvmsg	=	dtls_recvmsg,
 	.sendpage	=	tls_sendpage,
 	.release	=	tls_release,
+	.splice_read    =	tls_splice_read,
 	.read_sock      =       tls_read_sock,
 	.peek_len       =       tls_peek_len,
 };
