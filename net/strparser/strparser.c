@@ -59,7 +59,7 @@ static void strp_abort_rx_strp(struct strparser *strp, int err)
 	strp->rx_stopped = 1;
 
 	/* Report an error on the lower socket */
-	csk->sk_err = err;
+	csk->sk_err = -err;
 	csk->sk_error_report(csk);
 }
 
