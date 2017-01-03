@@ -43,6 +43,9 @@
 #include <asm/crypto/glue_helper.h>
 #endif
 
+#include "aes_gcm.h"
+#include "aes_keyexp.h"
+
 
 #define AESNI_ALIGN	16
 #define AES_BLOCK_MASK	(~(AES_BLOCK_SIZE - 1))
@@ -54,9 +57,11 @@
  */
 struct aesni_rfc4106_gcm_ctx {
 	u8 hash_subkey[16] __attribute__ ((__aligned__(AESNI_ALIGN)));
+		__attribute__ ((__aligned__(AESNI_ALIGN)));
 	struct crypto_aes_ctx aes_key_expanded
 		__attribute__ ((__aligned__(AESNI_ALIGN)));
 	u8 nonce[4];
+	struct gcm_data gdata;
 };
 
 struct aesni_rfc4106_gcm_sync_ctx {
@@ -179,9 +184,11 @@ static void aesni_gcm_enc_avx(void *ctx, u8 *out,
 {
         struct crypto_aes_ctx *aes_ctx = (struct crypto_aes_ctx*)ctx;
 	if ((plaintext_len < AVX_GEN2_OPTSIZE) || (aes_ctx-> key_length != AES_KEYSIZE_128)){
+		//printk("aesni_gcm_enc\n");
 		aesni_gcm_enc(ctx, out, in, plaintext_len, iv, hash_subkey, aad,
 				aad_len, auth_tag, auth_tag_len);
 	} else {
+		//printk("aesni_gcm_enc_avx_gen2\n");
 		aesni_gcm_precomp_avx_gen2(ctx, hash_subkey);
 		aesni_gcm_enc_avx_gen2(ctx, out, in, plaintext_len, iv, aad,
 					aad_len, auth_tag, auth_tag_len);
@@ -230,13 +237,16 @@ static void aesni_gcm_enc_avx2(void *ctx, u8 *out,
 {
        struct crypto_aes_ctx *aes_ctx = (struct crypto_aes_ctx*)ctx;
 	if ((plaintext_len < AVX_GEN2_OPTSIZE) || (aes_ctx-> key_length != AES_KEYSIZE_128)) {
+		//printk("enc_gcm \n");
 		aesni_gcm_enc(ctx, out, in, plaintext_len, iv, hash_subkey, aad,
 				aad_len, auth_tag, auth_tag_len);
 	} else if (plaintext_len < AVX_GEN4_OPTSIZE) {
+		//printk("enc_gcm  avx 2\n");
 		aesni_gcm_precomp_avx_gen2(ctx, hash_subkey);
 		aesni_gcm_enc_avx_gen2(ctx, out, in, plaintext_len, iv, aad,
 					aad_len, auth_tag, auth_tag_len);
 	} else {
+		//printk("enc_gcm  avx 4\n");
 		aesni_gcm_precomp_avx_gen4(ctx, hash_subkey);
 		aesni_gcm_enc_avx_gen4(ctx, out, in, plaintext_len, iv, aad,
 					aad_len, auth_tag, auth_tag_len);
@@ -295,12 +305,49 @@ static inline struct crypto_aes_ctx *aes_ctx(void *raw_ctx)
 	return (struct crypto_aes_ctx *)ALIGN(addr, align);
 }
 
+static inline struct gcm_data * gdata_ctx(void *raw_ctx) {
+	struct crypto_aes_ctx* ctx = aes_ctx(raw_ctx);
+	struct aesni_rfc4106_gcm_ctx* gcm_ctx =
+		container_of(ctx, struct aesni_rfc4106_gcm_ctx, aes_key_expanded);
+	return &gcm_ctx->gdata;
+}
+
+asmlinkage void aes_keyexp_128_enc_avx(uint8_t *, uint8_t *);
+asmlinkage void aesni_gcm128_precomp_avx_gen2(struct gcm_data *my_ctx_data);
+asmlinkage void aesni_gcm128_init_avx_gen2( struct gcm_data *my_ctx_data,
+		   uint8_t * iv,	//!< Pre-counter block j0: 4 byte salt (from Security Association) concatenated with 8 byte Initialization Vector (from IPSec ESP Payload) concatenated with 0x00000001. 16-byte pointer.
+		   uint8_t const *aad,	//!< Additional Authentication Data (AAD).
+		   uint64_t aad_len	//!< Length of AAD.
+    );
+asmlinkage void   aesni_gcm128_enc_finalize_avx_gen2(
+        struct gcm_data        *my_ctx_data,
+        uint8_t      *auth_tag, /* Authenticated Tag output. */
+        uint64_t     auth_tag_len); /* Authenticated Tag Length in bytes. Valid values are 16 (most likely), 12 or 8. */
+asmlinkage void   aesni_gcm128_enc_update_avx_gen2(
+        struct gcm_data        *my_ctx_data,
+        uint8_t      *out, /* Ciphertext output. Encrypt in-place is allowed.  */
+        const   uint8_t *in, /* Plaintext input */
+        uint64_t     plaintext_len); /* Length of data in Bytes for encryption. must be a multiple of 16 bytes*/
+asmlinkage void aesni_gcm128_enc_avx_gen2(struct gcm_data *my_ctx_data,
+		   uint8_t * out,	//!< Ciphertext output. Encrypt in-place is allowed.
+		   uint8_t const *in,	//!< Plaintext input
+		   uint64_t plaintext_len,	//!< Length of data in Bytes for encryption.
+		   uint8_t * iv,	//!< Pre-counter block j0: 4 byte salt (from Security Association) concatenated with 8 byte Initialization Vector (from IPSec ESP Payload) concatenated with 0x00000001. 16-byte pointer.
+		   uint8_t const *aad,	//!< Additional Authentication Data (AAD).
+		   uint64_t aad_len,	//!< Length of AAD.
+		   uint8_t * auth_tag,	//!< Authenticated Tag output.
+		   uint64_t auth_tag_len	//!< Authenticated Tag Length in bytes (must be a multiple of 4 bytes). Valid values are 16 (most likely), 12 or 8.
+    );
+
+
+
 static int aes_set_key_common(struct crypto_tfm *tfm, void *raw_ctx,
 			      const u8 *in_key, unsigned int key_len)
 {
 	struct crypto_aes_ctx *ctx = aes_ctx(raw_ctx);
 	u32 *flags = &tfm->crt_flags;
 	int err;
+	struct gcm_data* gdata = gdata_ctx(raw_ctx);
 
 	if (key_len != AES_KEYSIZE_128 && key_len != AES_KEYSIZE_192 &&
 	    key_len != AES_KEYSIZE_256) {
@@ -312,6 +359,10 @@ static int aes_set_key_common(struct crypto_tfm *tfm, void *raw_ctx,
 		err = crypto_aes_expand_key(ctx, in_key, key_len);
 	else {
 		kernel_fpu_begin();
+		//printk("Setting key\n");
+		aes_keyexp_128_enc_avx(in_key, (uint8_t *) gdata->expanded_keys);
+		aesni_gcm128_precomp_avx_gen2(gdata);
+		//printk("ctx size should be %li\n", sizeof (struct aesni_rfc4106_gcm_ctx));
 		err = aesni_set_key(ctx, in_key, key_len);
 		kernel_fpu_end();
 	}
@@ -978,32 +1029,40 @@ static int helper_rfc4106_encrypt(struct aead_request *req)
 		*(iv+4+i) = req->iv[i];
 	*((__be32 *)(iv+12)) = counter;
 
-	if (sg_is_last(req->src) &&
-	    req->src->offset + req->src->length <= PAGE_SIZE &&
-	    sg_is_last(req->dst) &&
-	    req->dst->offset + req->dst->length <= PAGE_SIZE) {
-		one_entry_in_sg = 1;
-		scatterwalk_start(&src_sg_walk, req->src);
-		assoc = scatterwalk_map(&src_sg_walk);
-		src = assoc + req->assoclen;
-		dst = src;
-		if (unlikely(req->src != req->dst)) {
-			scatterwalk_start(&dst_sg_walk, req->dst);
-			dst = scatterwalk_map(&dst_sg_walk) + req->assoclen;
-		}
-	} else {
-		/* Allocate memory for src, dst, assoc */
-		assoc = kmalloc(req->cryptlen + auth_tag_len + req->assoclen,
-				GFP_ATOMIC);
-		assocmem = assoc;
-		if (unlikely(!assoc))
-			return -ENOMEM;
-		scatterwalk_map_and_copy(assoc, req->src, 0,
-					 req->assoclen + req->cryptlen, 0);
-		src = assoc + req->assoclen;
-		dst = src;
-	}
+	/* printk("aesni encrypt.  There are %i source sg and %i dest sg\n", */
+	/* 		sg_nents_for_len(req->src, req->assoclen + req->cryptlen + 16), */
+	/* 		sg_nents_for_len(req->dst, req->assoclen + req->cryptlen + 16)); */
+	/* if (sg_is_last(req->src) && */
+	/*     req->src->offset + req->src->length <= PAGE_SIZE && */
+	/*     sg_is_last(req->dst) && */
+	/*     req->dst->offset + req->dst->length <= PAGE_SIZE) { */
+	/* 	one_entry_in_sg = 1; */
+	/* 	scatterwalk_start(&src_sg_walk, req->src); */
+	/* 	assoc = scatterwalk_map(&src_sg_walk); */
+	/* 	src = assoc + req->assoclen; */
+	/* 	dst = src; */
+	/* 	if (unlikely(req->src != req->dst)) { */
+	struct scatterlist tmp2[2];
+	struct scatterlist *sg2;
+	sg2 = scatterwalk_ffwd(tmp2, req->dst, req->assoclen);
+			scatterwalk_start(&dst_sg_walk, sg2);
+			dst = scatterwalk_map(&dst_sg_walk);
+	/* 	} */
+	/* } else { */
+	/* 	printk("Making a copy\n"); */
+	/* 	/\* Allocate memory for src, dst, assoc *\/ */
+	/* 	assoc = kmalloc(req->cryptlen + auth_tag_len + req->assoclen, */
+	/* 			GFP_ATOMIC); */
+	/* 	assocmem = assoc; */
+	/* 	if (unlikely(!assoc)) */
+	/* 		return -ENOMEM; */
+	/* 	scatterwalk_map_and_copy(assoc, req->src, 0, */
+	/* 				 req->assoclen + req->cryptlen, 0); */
+	/* 	src = assoc + req->assoclen; */
+	/* 	dst = src; */
+	/* } */
 
+	// Assoc must be contiguous
 	if (req->assoclen != padded_assoclen) {
 		scatterwalk_map_and_copy(assocbuf, req->src, 0,
 					 req->assoclen, 0);
@@ -1013,27 +1072,51 @@ static int helper_rfc4106_encrypt(struct aead_request *req)
 	}
 
 	kernel_fpu_begin();
-	aesni_gcm_enc_tfm(aes_ctx, dst, src, req->cryptlen, iv,
-			  ctx->hash_subkey, assoc, req->assoclen - 8,
-			  dst + req->cryptlen, auth_tag_len);
+	aesni_gcm128_init_avx_gen2(&ctx->gdata, iv, assoc, req->assoclen - 8);
+	struct scatterlist tmp[2];
+	long total = 0;
+	struct scatterlist *sg;
+	sg = scatterwalk_ffwd(tmp, req->src, req->assoclen);
+	scatterwalk_start(&src_sg_walk, sg);
+	/* printk("Initial pagelen %i assoclen %i\n", scatterwalk_pagelen(&src_sg_walk), */
+	/* 	req->assoclen); */
+	while (total < req->cryptlen) {
+		src = scatterwalk_map(&src_sg_walk);
+		aesni_gcm128_enc_update_avx_gen2(&ctx->gdata, dst + total, src, scatterwalk_pagelen(&src_sg_walk));
+		scatterwalk_unmap(src);
+		total += scatterwalk_pagelen(&src_sg_walk);
+		/* printk("Copied %li of %i, pagelen %i\n", total, req->cryptlen, scatterwalk_pagelen(&src_sg_walk)); */
+		scatterwalk_advance(&src_sg_walk, scatterwalk_pagelen(&src_sg_walk));
+		scatterwalk_pagedone(&src_sg_walk, 1, 1);
+	}
+	scatterwalk_done(&src_sg_walk, 1, 0);
+	/* printk("finalize\n"); */
+	aesni_gcm128_enc_finalize_avx_gen2(&ctx->gdata, dst + req->cryptlen, auth_tag_len);
+	/* aesni_gcm128_enc_avx_gen2(&ctx->gdata, dst, src, req->cryptlen, */
+	/* 		iv, assoc, req->assoclen - 8, */
+	/* 		dst + req->cryptlen, auth_tag_len); */
+
+	/* aesni_gcm_enc_tfm(aes_ctx, dst, src, req->cryptlen, iv, */
+	/* 		  ctx->hash_subkey, assoc, req->assoclen - 8, */
+	/* 		  dst + req->cryptlen, auth_tag_len); */
 	kernel_fpu_end();
 
 	/* The authTag (aka the Integrity Check Value) needs to be written
 	 * back to the packet. */
-	if (one_entry_in_sg) {
-		if (unlikely(req->src != req->dst)) {
-			scatterwalk_unmap(dst - req->assoclen);
+	/* if (one_entry_in_sg) { */
+	/* 	if (unlikely(req->src != req->dst)) { */
+			scatterwalk_unmap(dst);
 			scatterwalk_advance(&dst_sg_walk, req->dst->length);
 			scatterwalk_done(&dst_sg_walk, 1, 0);
-		}
-		scatterwalk_unmap(assoc);
-		scatterwalk_advance(&src_sg_walk, req->src->length);
-		scatterwalk_done(&src_sg_walk, req->src == req->dst, 0);
-	} else {
-		scatterwalk_map_and_copy(dst, req->dst, req->assoclen,
-					 req->cryptlen + auth_tag_len, 1);
-		kfree(assocmem);
-	}
+	/* 	} */
+	/* 	scatterwalk_unmap(assoc); */
+	/* 	scatterwalk_advance(&src_sg_walk, req->src->length); */
+	/* 	scatterwalk_done(&src_sg_walk, req->src == req->dst, 0); */
+	/* } else { */
+	/* 	scatterwalk_map_and_copy(dst, req->dst, req->assoclen, */
+	/* 				 req->cryptlen + auth_tag_len, 1); */
+	/* 	kfree(assocmem); */
+	/* } */
 	return 0;
 }
 
@@ -1064,6 +1147,10 @@ static int helper_rfc4106_decrypt(struct aead_request *req)
 	for (i = 0; i < 8; i++)
 		*(iv+4+i) = req->iv[i];
 	*((__be32 *)(iv+12)) = counter;
+
+	/* printk("aesni decrypt.  There are %i source sg and %i dest sg\n", */
+	/* 		sg_nents_for_len(req->src, req->assoclen + req->cryptlen), */
+	/* 		sg_nents_for_len(req->dst, req->assoclen + req->cryptlen - 16)); */
 
 	if (sg_is_last(req->src) &&
 	    req->src->offset + req->src->length <= PAGE_SIZE &&
@@ -1232,7 +1319,8 @@ static struct crypto_alg aesni_algs[] = { {
 	.cra_priority		= 300,
 	.cra_flags		= CRYPTO_ALG_TYPE_CIPHER,
 	.cra_blocksize		= AES_BLOCK_SIZE,
-	.cra_ctxsize		= sizeof(struct crypto_aes_ctx) +
+	.cra_ctxsize		= /*sizeof(struct crypto_aes_ctx) +*/ sizeof(struct aesni_rfc4106_gcm_ctx) +
+
 				  AESNI_ALIGN - 1,
 	.cra_alignmask		= 0,
 	.cra_module		= THIS_MODULE,
@@ -1577,7 +1665,8 @@ static struct aead_alg aesni_aead_algs[] = { {
 		.cra_priority		= 400,
 		.cra_flags		= CRYPTO_ALG_ASYNC,
 		.cra_blocksize		= 1,
-		.cra_ctxsize		= sizeof(struct cryptd_aead *),
+		.cra_ctxsize		= sizeof(struct aesni_rfc4106_gcm_ctx),
+//		.cra_ctxsize		= sizeof(struct cryptd_aead *),
 		.cra_module		= THIS_MODULE,
 	},
 } };

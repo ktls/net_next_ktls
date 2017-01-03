@@ -86,8 +86,12 @@ ifeq ($(avx2_supported),yes)
 	serpent-avx2-y := serpent-avx2-asm_64.o serpent_avx2_glue.o
 endif
 
+arch/x86/crypto/gcm128_avx_gen2.o: arch/x86/crypto/gcm128_avx_gen2.asm
+	cd arch/x86/crypto;	nasm -f elf64 gcm128_avx_gen2.asm
+arch/x86/crypto/keyexp_128.o: arch/x86/crypto/keyexp_128.asm
+	cd arch/x86/crypto;	nasm -f elf64 keyexp_128.asm
 aesni-intel-y := aesni-intel_asm.o aesni-intel_glue.o fpu.o
-aesni-intel-$(CONFIG_64BIT) += aesni-intel_avx-x86_64.o aes_ctrby8_avx-x86_64.o
+aesni-intel-$(CONFIG_64BIT) += aesni-intel_avx-x86_64.o aes_ctrby8_avx-x86_64.o gcm128_avx_gen2.o keyexp_128.o
 ghash-clmulni-intel-y := ghash-clmulni-intel_asm.o ghash-clmulni-intel_glue.o
 sha1-ssse3-y := sha1_ssse3_asm.o sha1_ssse3_glue.o
 poly1305-x86_64-y := poly1305-sse2-x86_64.o poly1305_glue.o
