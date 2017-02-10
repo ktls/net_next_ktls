@@ -126,7 +126,8 @@ static void tls_abort_cb(struct strparser *strp, int err)
 		tls_err_abort(tsk);
 }
 
-static int decrypt_skb(struct tls_sock *tsk, struct sk_buff *skb)
+static int decrypt_skb(struct tls_sock *tsk, struct sk_buff *skb,
+		struct scatterlist *sgout)
 {
 	int ret, nsg;
 	size_t prepend, overhead;
@@ -172,11 +173,13 @@ static int decrypt_skb(struct tls_sock *tsk, struct sk_buff *skb)
 	 * the fact that the lengths of skbuff_in and skbuff_out are
 	 * different
 	 */
+	if (!sgout)
+			sgout = tsk->sgin;
 
 	skb->sk = &tsk->sk;
 	ret = tls_do_decryption(tsk,
 				tsk->sgin,
-				tsk->sgin,
+				sgout,
 				tsk->header_recv2,
 				rxm->full_len - overhead,
 				skb);
@@ -511,6 +514,9 @@ static int tls_setsockopt(struct socket *sock,
 	if (level != AF_TLS)
 		return -ENOPROTOOPT;
 
+	if (!tsk->socket)
+			return -EBADMSG;
+
 	//printk("tls_setsockopt\n");
 
 	lock_sock(sock->sk);
@@ -785,19 +791,19 @@ static int tls_do_encryption(struct tls_sock *tsk,
 	int ret;
 	unsigned int req_size = sizeof(struct aead_request) +
 		crypto_aead_reqsize(tsk->aead_recv);
-	struct tls_rx_msg* msg = tls_rx_msg(skb);
-	msg->aead_req = (void *)kmalloc(req_size, GFP_ATOMIC);
+	struct aead_request* aead_req;
+	aead_req = (void *)kmalloc(req_size, GFP_ATOMIC);
 
-	if (!msg->aead_req)
+	if (!aead_req)
 		return -ENOMEM;
 
-	aead_request_set_tfm(msg->aead_req, tsk->aead_send);
-	aead_request_set_ad(msg->aead_req, TLS_AAD_SPACE_SIZE);
-	aead_request_set_crypt(msg->aead_req, sgin, sgout, data_len, tsk->iv_send);
+	aead_request_set_tfm(aead_req, tsk->aead_send);
+	aead_request_set_ad(aead_req, TLS_AAD_SPACE_SIZE);
+	aead_request_set_crypt(aead_req, sgin, sgout, data_len, tsk->iv_send);
 
-	ret = crypto_aead_encrypt(msg->aead_req);
+	ret = crypto_aead_encrypt(aead_req);
 
- 	kfree(msg->aead_req);
+ 	kfree(aead_req);
 	if (ret < 0)
 		return ret;
 	tls_kernel_sendpage(tsk);
@@ -854,6 +860,7 @@ static void tls_kernel_sendpage(struct tls_sock *tsk)
 
 	if (!tsk->socket)
 		return;
+	//printk("tls_kernel_sendpage\n");
 
 	ret = kernel_sendpage(
 		tsk->socket, tsk->pages_send, /* offset */ tsk->send_offset,
@@ -877,6 +884,43 @@ static void tls_kernel_sendpage(struct tls_sock *tsk)
 	} else if (ret != -EAGAIN) {
 		tls_err_abort(tsk);
 	}
+}
+
+static int tls_push_zerocopy(struct tls_sock *tsk, struct scatterlist *sgin, int pages, int bytes) {
+	int ret;
+
+	tls_make_aad(tsk, 0, tsk->aad_send, bytes, tsk->iv_send);
+
+	sg_chain(tsk->sgaad_send, 2, sgin);
+	//sg_unmark_end(&sgin[pages - 1]);
+	sg_chain(sgin, pages + 1, tsk->sgtag_send);
+	ret = sg_nents_for_len(tsk->sgaad_send, bytes + 13 + 16);
+
+	ret = tls_pre_encrypt(tsk, bytes);
+	if (ret < 0)
+		goto out;
+
+	tls_make_prepend(tsk, page_address(tsk->pages_send), bytes);
+
+	tsk->send_len = bytes;
+	tsk->send_offset = 0;
+
+	ret = tls_do_encryption(tsk,
+				tsk->sgaad_send,
+				tsk->sg_tx_data,
+				bytes, NULL);
+
+	if (ret < 0)
+		goto out;
+
+out:
+	if (ret < 0) {
+		tsk->sk.sk_err = EPIPE;
+//		printk("tls_push err: %i\n", ret);
+		return ret;
+	}
+
+	return 0;
 }
 
 static int tls_push(struct tls_sock *tsk)
@@ -941,6 +985,46 @@ out:
 	return 0;
 }
 
+static int zerocopy_from_iter(struct iov_iter *from,
+						struct scatterlist* sg,
+		int *bytes) {
+
+	int len = iov_iter_count(from);
+	int n = 0;
+	if (bytes)
+			*bytes = 0;
+
+	// TODO pass in number of pages
+	while (iov_iter_count(from) && n < MAX_SKB_FRAGS - 1) {
+		struct page *pages[MAX_SKB_FRAGS];
+		size_t start;
+		ssize_t copied;
+		int j = 0;
+
+		if (bytes && *bytes >= TLS_MAX_PAYLOAD_SIZE)
+				break;
+
+		copied = iov_iter_get_pages(from, pages, TLS_MAX_PAYLOAD_SIZE,
+					    MAX_SKB_FRAGS - n, &start);
+		if (bytes)
+				*bytes += copied;
+		if (copied < 0)
+			return -EFAULT;
+
+		iov_iter_advance(from, copied);
+
+		while (copied) {
+			int size = min_t(int, copied, PAGE_SIZE - start);
+			sg_set_page(&sg[n], pages[j], size, start);
+			start = 0;
+			copied -= size;
+			j++;
+			n++;
+		}
+	}
+	return n;
+}
+
 static int tls_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
@@ -980,14 +1064,41 @@ static int tls_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 		bool merge = true;
 		int i;
 		struct page_frag *pfrag;
-
 		if (sk->sk_err)
 			goto send_end;
-
 		if (!sk_stream_memory_free(sk))
 			goto wait_for_memory;
 
 		skb = tcp_write_queue_tail(sk);
+		// Try for zerocopy
+		if (!skb && !tsk->pages_send && eor) {
+				int pages;
+				int err;
+				// TODO can send partial pages?
+				int page_count = iov_iter_npages(&msg->msg_iter, ALG_MAX_PAGES);
+				if (page_count >= ALG_MAX_PAGES)
+						goto reg_send;
+				struct scatterlist sgin[ALG_MAX_PAGES + 1];
+				sg_init_table(sgin, ALG_MAX_PAGES + 1);
+				int bytes;
+				//  TODO check pages?
+				pages = err = zerocopy_from_iter(&msg->msg_iter, &sgin[0], &bytes);
+				tsk->unsent += bytes;
+				if (err < 0)
+						goto send_end;
+
+				// Try to send msg
+				tls_push_zerocopy(tsk, sgin, pages, bytes);
+				for (; pages > 0; pages--) {
+						put_page(sg_page(&sgin[pages - 1]));
+				}
+				if (err < 0) {
+						tls_err_abort(tsk);
+						goto send_end;
+				}
+				continue;
+		}
+	reg_send:
 
 		while (!skb) {
 			skb = alloc_skb(0, sk->sk_allocation);
@@ -1052,9 +1163,7 @@ static int tls_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 
 		if (tsk->unsent >= TLS_MAX_PAYLOAD_SIZE) {
 			ret = tls_push(tsk);
-			if (ret == -EINPROGRESS)
-				goto push_wait;
-			else if (ret)
+			if (ret)
 				goto send_end;
 		}
 
@@ -1062,9 +1171,7 @@ static int tls_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 
 wait_for_memory:
 		ret = tls_push(tsk);
-		if (ret == -EINPROGRESS)
-			goto push_wait;
-		else if (ret)
+		if (ret)
 			goto send_end;
 push_wait:
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
@@ -1285,7 +1392,6 @@ static struct sk_buff *tls_wait_data(struct tls_sock *tsk, int flags,
 	return skb;
 }
 
-
 static int tls_recvmsg(struct socket *sock,
 		       struct msghdr *msg,
 		       size_t len,
@@ -1342,19 +1448,41 @@ static int tls_recvmsg(struct socket *sock,
 		 * message
 		 */
 		if (!tls_rx_msg(skb)->decrypted) {
-			err = decrypt_skb(tsk, skb);
-			if (err == -EINPROGRESS)
-				continue;
-			if (err < 0) {
-				tls_err_abort(tsk);
-				goto recv_end;
-			}
+				int page_count = iov_iter_npages(&msg->msg_iter, ALG_MAX_PAGES);
+				if (rxm->full_len - TLS_OVERHEAD >= len && page_count < ALG_MAX_PAGES) {
+						struct scatterlist sgin[ALG_MAX_PAGES + 1];
+						char crap[21];
+						int pages;
+						sg_init_table(sgin, ALG_MAX_PAGES + 1);
+						sg_set_buf(&sgin[0],crap, 21);
+						printk("Doing zerocopy\n");
+						pages = err = zerocopy_from_iter(&msg->msg_iter, &sgin[1], NULL);
+						if (err < 0)
+								goto recv_end;
+
+						err = decrypt_skb(tsk, skb, sgin);
+						for (; pages > 0; pages--) {
+								put_page(sg_page(&sgin[pages]));
+						}
+						if (err < 0) {
+								tls_err_abort(tsk);
+								goto recv_end;
+						}
+				} else {
+						err = decrypt_skb(tsk, skb, NULL);
+						if (err < 0) {
+								tls_err_abort(tsk);
+								goto recv_end;
+						}
+						// TODO fix chunk
+						chunk = min_t(unsigned int, rxm->full_len, len);
+						err = skb_copy_datagram_msg(skb, rxm->offset, msg, chunk);
+						if (err < 0)
+								goto recv_end;
+				}
 			tls_rx_msg(skb)->decrypted = 1;
 		}
 		chunk = min_t(unsigned int, rxm->full_len, len);
-		err = skb_copy_datagram_msg(skb, rxm->offset, msg, chunk);
-		if (err < 0)
-			goto recv_end;
 		copied += chunk;
 		len -= chunk;
 		if (likely(!(flags & MSG_PEEK))) {
