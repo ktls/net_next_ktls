@@ -46,6 +46,7 @@ MODULE_DESCRIPTION("Transport Layer Security Support");
 MODULE_LICENSE("Dual BSD/GPL");
 
 static struct proto tls_prot;
+static struct proto tls_sw_prot;
 
 static int tls_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 {
@@ -189,14 +190,16 @@ void tls_sk_destruct(struct sock *sk)
 	struct tls_context *ctx = sk->sk_user_data;
 	struct tls_crypto_info *crypto_info;
 
-	ctx->sk_destruct(sk);
-
 	if (!ctx)
 		goto out;
 
 	crypto_info = &ctx->crypto_send;
 	if (TLS_IS_HW_OFFLOAD(crypto_info))
 		tls_clear_device_offload(sk, ctx);
+	else if(TLS_IS_SW_OFFLOAD(crypto_info))
+		tls_clear_sw_offload(sk);
+
+	ctx->sk_destruct(sk);
 
 	kfree(ctx);
 out:
@@ -254,12 +257,6 @@ int tls_sk_attach(struct sock *sk, int optname, char __user *optval,
 		goto err_sk_user_data;
 	}
 
-	/* currently we support only HW offload */
-	if (!TLS_IS_HW_OFFLOAD(crypto_info)) {
-		rc = -ENOPROTOOPT;
-		goto err_crypto_info;
-	}
-
 	/* check version */
 	if (crypto_info->version != TLS_1_2_VERSION) {
 		rc = -ENOTSUPP;
@@ -287,8 +284,16 @@ int tls_sk_attach(struct sock *sk, int optname, char __user *optval,
 		goto err_crypto_info;
 	}
 
+	struct proto* prot;
+
 	if (TLS_IS_HW_OFFLOAD(crypto_info)) {
 		rc = tls_set_device_offload(sk, ctx);
+		prot = &tls_prot;
+		if (rc)
+			goto err_crypto_info;
+	} else if (TLS_IS_SW_OFFLOAD(crypto_info)) {
+		rc = tls_set_sw_offload(sk, ctx);
+		prot = &tls_sw_prot;
 		if (rc)
 			goto err_crypto_info;
 	}
@@ -300,9 +305,10 @@ int tls_sk_attach(struct sock *sk, int optname, char __user *optval,
 	ctx->sk_destruct = sk->sk_destruct;
 	/* After this line tls_is_sk_attach can be called */
 	smp_store_release(&sk->sk_destruct, &tls_sk_destruct);
+	rc = 0;
 
 	/* TODO: add protection */
-	sk->sk_prot = &tls_prot;
+	sk->sk_prot = prot;
 	goto out;
 
 err_set_device_offload:
@@ -322,6 +328,9 @@ static int __init tls_init(void)
 	tls_prot		= tcp_prot;
 	tls_prot.sendmsg	= tls_sendmsg;
 	tls_prot.sendpage	= tls_sendpage;
+
+	tls_sw_prot             = tcp_prot;
+	tls_sw_prot.sendmsg     = tls_sw_sendmsg;
 
 	return 0;
 }
