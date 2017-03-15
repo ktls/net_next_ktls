@@ -103,12 +103,12 @@ static inline void tls_make_prepend(struct sock *sk,
 	 * size TLS_HEADER_SIZE + TLS_NONCE_EXPLICIT_SIZE
 	 */
         buf[0] = TLS_RECORD_TYPE_DATA;
-	buf[1] = ctx->version[0];
-	buf[2] = ctx->version[1];
+	buf[1] = TLS_1_2_VERSION_MAJOR;
+	buf[2] = TLS_1_2_VERSION_MINOR;
 	/* we can use IV for nonce explicit according to spec */
 		buf[3] = pkt_len >> 8;
 		buf[4] = pkt_len & 0xFF;
-		memcpy(buf + TLS_NONCE_OFFSET, ctx->iv_send, TLS_CIPHER_AES_GCM_128_IV_SIZE);
+		memcpy(buf + TLS_NONCE_OFFSET, ctx->iv, TLS_CIPHER_AES_GCM_128_IV_SIZE);
 }
 
 static inline void tls_make_aad(struct sock *sk,
@@ -122,8 +122,8 @@ static inline void tls_make_aad(struct sock *sk,
         memcpy(buf, nonce_explicit, TLS_NONCE_SIZE);
 
 	buf[8] = TLS_RECORD_TYPE_DATA;
-	buf[9] = ctx->version[0];
-	buf[10] = ctx->version[1];
+	buf[9] = TLS_1_2_VERSION_MAJOR;
+	buf[10] = TLS_1_2_VERSION_MINOR;
 	buf[11] = size >> 8;
 	buf[12] = size & 0xFF;
 }
@@ -149,7 +149,7 @@ static int tls_do_encryption(struct sock *sk,
 
 	aead_request_set_tfm(aead_req, ctx->aead_send);
 	aead_request_set_ad(aead_req, TLS_AAD_SPACE_SIZE);
-	aead_request_set_crypt(aead_req, sgin, sgout, data_len, ctx->iv_send);
+	aead_request_set_crypt(aead_req, sgin, sgout, data_len, ctx->iv);
 
 	ret = crypto_aead_encrypt(aead_req);
 
@@ -227,7 +227,7 @@ static void tls_kernel_sendpage(struct sock *sk)
 			/* sk->sk_wmem_queued -= ctx->send_len; */
 			kfree_skb(head);
 			ctx->unsent -= ctx->send_len;
-			increment_seqno(ctx->iv_send, sk);
+			increment_seqno(ctx->iv, sk);
 			__free_pages(ctx->pages_send, ctx->order_npages);
 			ctx->pages_send = NULL;
 			sk->sk_write_space(sk);
@@ -241,7 +241,7 @@ static int tls_push_zerocopy(struct sock *sk, struct scatterlist *sgin, int page
 	int ret;
         struct tls_sw_context *ctx = sw_ctx(sk);
 
-	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->iv_send);
+	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->iv);
 
 	sg_chain(ctx->sgaad_send, 2, sgin);
 	//sg_unmark_end(&sgin[pages - 1]);
@@ -299,7 +299,7 @@ static int tls_push(struct sock *sk)
 	}
 
 
-	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->iv_send);
+	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->iv);
 
 	sg_chain(ctx->sgaad_send, 2, ctx->sg_tx_data2);
 	sg_chain(ctx->sg_tx_data2,
@@ -542,12 +542,9 @@ void tls_clear_sw_offload(struct sock *sk)
 	}
 
 
-	ctx->rx_stopped = 1;
 	sk->sk_write_space = ctx->saved_sk_write_space;
 
-	kfree(ctx->iv_send);
-
-	kfree(ctx->key_send.key);
+	kfree(ctx->iv);
 
 	crypto_free_aead(ctx->aead_send);
 
@@ -617,16 +614,8 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 	}
 	memcpy(offload_ctx->iv, iv, iv_size);
 
-	offload_ctx->iv_send = offload_ctx->iv;
-	memset(&offload_ctx->key_send, 0, sizeof(offload_ctx->key_send));
-
-	offload_ctx->cipher_crypto = NULL;
-	memset(offload_ctx->version, 0, sizeof(offload_ctx->version));
-
 	offload_ctx->pages_send = NULL;
 	offload_ctx->unsent = 0;
-
-	offload_ctx->attached = 0;
 
 	/* Preallocation for sending
 	 *   scatterlist: AAD | data | TAG (for crypto API)
@@ -649,14 +638,10 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 	sg_unmark_end(&offload_ctx->sgaad_send[1]);
 	INIT_WORK(&offload_ctx->send_work, tls_tx_work);
 
-	offload_ctx->cipher_type = TLS_CIPHER_AES_GCM_128;
-	offload_ctx->cipher_crypto = "rfc5288(gcm(aes))";
-	offload_ctx->version[0] = TLS_1_2_VERSION_MAJOR;
-	offload_ctx->version[1] = TLS_1_2_VERSION_MINOR;
-
 	if (!offload_ctx->aead_send) {
-		offload_ctx->aead_send = crypto_alloc_aead(offload_ctx->cipher_crypto,
-						CRYPTO_ALG_INTERNAL, 0);
+		offload_ctx->aead_send = crypto_alloc_aead(
+			"rfc5288(gcm(aes))",
+			CRYPTO_ALG_INTERNAL, 0);
 		if (IS_ERR(offload_ctx->aead_send)) {
 			rc = PTR_ERR(offload_ctx->aead_send);
 			offload_ctx->aead_send = NULL;
@@ -669,7 +654,6 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 	sk->sk_write_space = tls_write_space;
 
         offload_ctx->tx_stopped = 0;
-	offload_ctx->attached = 1;
 	skb_queue_head_init(&offload_ctx->tx_queue);
 	offload_ctx->sk = sk;
 	char keyval[TLS_CIPHER_AES_GCM_128_KEY_SIZE + TLS_CIPHER_AES_GCM_128_SALT_SIZE];
