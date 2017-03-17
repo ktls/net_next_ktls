@@ -36,36 +36,6 @@ static struct tls_sw_context *sw_ctx(const struct sock *sk)
         return (struct tls_sw_context*)ctx->offload_ctx;
 }
 
-static inline bool tls_stream_memory_free(const struct sock *sk)
-{
-        return sw_ctx(sk)->unsent < TLS_MAX_PAYLOAD_SIZE;
-}
-
-static void tls_err_abort(struct sock *sk);
-
-static void increment_seqno(unsigned char *seq, struct sock *sk)
-{
-	int i;
-
-	for (i = 7; i >= 0; i--) {
-		++seq[i];
-		if (seq[i] != 0)
-			break;
-	}
-	/* Check for overflow. If overflowed, connection must
-	 * disconnect.  Raise an error and notify userspace.
-	 */
-	if (unlikely(i == -1))
-		tls_err_abort(sk);
-}
-
-static void tls_err_abort(struct sock *sk)
-{
-//	printk("tls_err_abort\n");
-	xchg(&sk->sk_err, EBADMSG);
-	sk->sk_error_report(sk);
-}
-
 /* Called with lower socket held */
 static void tls_write_space(struct sock *sk)
 {
@@ -88,27 +58,6 @@ static void tls_tx_work(struct work_struct *w)
 	if (!ctx->tx_stopped)
 		tls_kernel_sendpage(sk);
 	release_sock(sk);
-}
-
-static inline void tls_make_prepend(struct sock *sk,
-				    char *buf,
-				    size_t plaintext_len)
-{
-	size_t pkt_len;
-        struct tls_sw_context *ctx = sw_ctx(sk);
-
-	pkt_len = plaintext_len + TLS_CIPHER_AES_GCM_128_IV_SIZE + TLS_CIPHER_AES_GCM_128_TAG_SIZE;
-
-	/* we cover nonce explicit here as well, so buf should be of
-	 * size TLS_HEADER_SIZE + TLS_NONCE_EXPLICIT_SIZE
-	 */
-        buf[0] = TLS_RECORD_TYPE_DATA;
-	buf[1] = TLS_1_2_VERSION_MAJOR;
-	buf[2] = TLS_1_2_VERSION_MINOR;
-	/* we can use IV for nonce explicit according to spec */
-		buf[3] = pkt_len >> 8;
-		buf[4] = pkt_len & 0xFF;
-		memcpy(buf + TLS_NONCE_OFFSET, ctx->iv, TLS_CIPHER_AES_GCM_128_IV_SIZE);
 }
 
 static inline void tls_make_aad(struct sock *sk,
@@ -149,7 +98,7 @@ static int tls_do_encryption(struct sock *sk,
 
 	aead_request_set_tfm(aead_req, ctx->aead_send);
 	aead_request_set_ad(aead_req, TLS_AAD_SPACE_SIZE);
-	aead_request_set_crypt(aead_req, sgin, sgout, data_len, ctx->iv);
+	aead_request_set_crypt(aead_req, sgin, sgout, data_len, ctx->ctx.iv);
 
 	ret = crypto_aead_encrypt(aead_req);
 
@@ -227,7 +176,7 @@ static void tls_kernel_sendpage(struct sock *sk)
 			/* sk->sk_wmem_queued -= ctx->send_len; */
 			kfree_skb(head);
 			ctx->unsent -= ctx->send_len;
-			increment_seqno(ctx->iv, sk);
+			tls_increment_seqno(ctx->ctx.iv, sk);
 			__free_pages(ctx->pages_send, ctx->order_npages);
 			ctx->pages_send = NULL;
 			sk->sk_write_space(sk);
@@ -241,7 +190,7 @@ static int tls_push_zerocopy(struct sock *sk, struct scatterlist *sgin, int page
 	int ret;
         struct tls_sw_context *ctx = sw_ctx(sk);
 
-	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->iv);
+	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->ctx.iv);
 
 	sg_chain(ctx->sgaad_send, 2, sgin);
 	//sg_unmark_end(&sgin[pages - 1]);
@@ -252,7 +201,10 @@ static int tls_push_zerocopy(struct sock *sk, struct scatterlist *sgin, int page
 	if (ret < 0)
 		goto out;
 
-	tls_make_prepend(sk, page_address(ctx->pages_send), bytes);
+	struct tls_context *sk_ctx = sk->sk_user_data;
+	tls_fill_prepend(&sk_ctx->crypto_send, &ctx->ctx,
+			page_address(ctx->pages_send),
+			bytes, TLS_RECORD_TYPE_DATA);
 
 	ctx->send_len = bytes;
 	ctx->send_offset = 0;
@@ -299,7 +251,7 @@ static int tls_push(struct sock *sk)
 	}
 
 
-	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->iv);
+	tls_make_aad(sk, 0, ctx->aad_send, bytes, ctx->ctx.iv);
 
 	sg_chain(ctx->sgaad_send, 2, ctx->sg_tx_data2);
 	sg_chain(ctx->sg_tx_data2,
@@ -310,7 +262,10 @@ static int tls_push(struct sock *sk)
 	if (ret < 0)
 		goto out;
 
-	tls_make_prepend(sk, page_address(ctx->pages_send), bytes);
+	struct tls_context *sk_ctx = sk->sk_user_data;
+	tls_fill_prepend(&sk_ctx->crypto_send, &ctx->ctx,
+			page_address(ctx->pages_send),
+			bytes, TLS_RECORD_TYPE_DATA);
 
 	ctx->send_len = bytes;
 	ctx->send_offset = 0;
@@ -544,7 +499,7 @@ void tls_clear_sw_offload(struct sock *sk)
 
 	sk->sk_write_space = ctx->saved_sk_write_space;
 
-	kfree(ctx->iv);
+	kfree(ctx->ctx.iv);
 
 	crypto_free_aead(ctx->aead_send);
 
@@ -604,15 +559,15 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 		goto out;
 	}
 
-	offload_ctx->prepend_size = TLS_HEADER_SIZE + nonece_size;
-	offload_ctx->tag_size = tag_size;
-	offload_ctx->iv_size = iv_size;
-	offload_ctx->iv = kmalloc(iv_size, GFP_KERNEL);
-	if (!offload_ctx->iv) {
+	offload_ctx->ctx.prepand_size = TLS_HEADER_SIZE + nonece_size;
+	offload_ctx->ctx.tag_size = tag_size;
+	offload_ctx->ctx.iv_size = iv_size;
+	offload_ctx->ctx.iv = kmalloc(iv_size, GFP_KERNEL);
+	if (!offload_ctx->ctx.iv) {
 		rc = ENOMEM;
 		goto out;
 	}
-	memcpy(offload_ctx->iv, iv, iv_size);
+	memcpy(offload_ctx->ctx.iv, iv, iv_size);
 
 	offload_ctx->pages_send = NULL;
 	offload_ctx->unsent = 0;
