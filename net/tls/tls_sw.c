@@ -32,6 +32,16 @@ static struct tls_sw_context *sw_ctx(const struct sock *sk)
 	return (struct tls_sw_context *)ctx->offload_ctx;
 }
 
+bool tls_sw_stream_memory_free(const struct sock *sk)
+{
+	const struct tls_sw_context *ctx = sw_ctx(sk);
+	struct tls_context *tls_ctx = sk->sk_user_data;
+	if (!ctx->sending && ((ctx->unsent >= TLS_MAX_PAYLOAD_SIZE) || ctx->kerneling)) {
+		return 0;
+	}
+	return tls_ctx->sk_stream_memory_free(sk);
+}
+
 static int tls_kernel_sendpage(struct sock *sk, int flags);
 
 /* Called with lower socket held */
@@ -73,7 +83,7 @@ static inline void tls_make_aad(struct sock *sk,
 
 static int tls_do_encryption(struct sock *sk, struct scatterlist *sgin,
 			     struct scatterlist *sgout, size_t data_len,
-			     struct sk_buff *skb)
+			struct sk_buff *skb, int flags)
 {
 	struct tls_sw_context *ctx = sw_ctx(sk);
 	int ret;
@@ -97,7 +107,7 @@ static int tls_do_encryption(struct sock *sk, struct scatterlist *sgin,
 	kfree(aead_req);
 	if (ret < 0)
 		return ret;
-	tls_kernel_sendpage(sk, MSG_DONTWAIT);
+	ret = tls_kernel_sendpage(sk, flags);
 
 	return ret;
 }
@@ -158,9 +168,12 @@ static int tls_kernel_sendpage(struct sock *sk, int flags)
 	 * push the same record again.
 	 */
 	ctx->pages_send = NULL;
+	ctx->sending = 1;
+	ctx->kerneling = 1;
 	ret = do_tcp_sendpages(sk, pages_send, ctx->send_offset,
 			       ctx->send_len + TLS_OVERHEAD - ctx->send_offset,
 			       flags);
+	ctx->sending = 0;
 	if (ret > 0) {
 		ctx->send_offset += ret;
 		if (ctx->send_offset >= ctx->send_len + TLS_OVERHEAD) {
@@ -173,6 +186,7 @@ static int tls_kernel_sendpage(struct sock *sk, int flags)
 			kfree_skb(head);
 			ctx->unsent -= ctx->send_len;
 			tls_increment_seqno(ctx->ctx.iv, sk);
+			ctx->kerneling = 0;
 			__free_pages(pages_send, ctx->order_npages);
 			return ret;
 		}
@@ -185,7 +199,7 @@ static int tls_kernel_sendpage(struct sock *sk, int flags)
 }
 
 static int tls_push_zerocopy(struct sock *sk, struct scatterlist *sgin,
-			     int pages, int bytes, unsigned char record_type)
+			int pages, int bytes, unsigned char record_type, int flags)
 {
 	int ret;
 	struct tls_sw_context *ctx = sw_ctx(sk);
@@ -212,7 +226,7 @@ static int tls_push_zerocopy(struct sock *sk, struct scatterlist *sgin,
 	ret = tls_do_encryption(sk,
 				ctx->sgaad_send,
 				ctx->sg_tx_data,
-				bytes, NULL);
+				bytes, NULL, flags);
 
 	if (ret < 0)
 		goto out;
@@ -226,7 +240,7 @@ out:
 	return 0;
 }
 
-static int tls_push(struct sock *sk, unsigned char record_type)
+static int tls_push(struct sock *sk, unsigned char record_type, int flags)
 {
 	struct tls_sw_context *ctx = sw_ctx(sk);
 	int bytes = min_t(int, ctx->unsent, (int)TLS_MAX_PAYLOAD_SIZE);
@@ -255,6 +269,7 @@ static int tls_push(struct sock *sk, unsigned char record_type)
 		     record_type);
 
 	sg_chain(ctx->sgaad_send, 2, ctx->sg_tx_data2);
+	sg_unmark_end(&ctx->sg_tx_data2[nsg - 1]);
 	sg_chain(ctx->sg_tx_data2,
 		 nsg + 1,
 		 ctx->sgtag_send);
@@ -274,10 +289,7 @@ static int tls_push(struct sock *sk, unsigned char record_type)
 	ret = tls_do_encryption(sk,
 				ctx->sgaad_send,
 				ctx->sg_tx_data,
-				bytes, head);
-
-	if (ret < 0)
-		goto out;
+				bytes, head, flags);
 
 out:
 	if (ret < 0) {
@@ -389,7 +401,7 @@ int tls_sw_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 				goto send_end;
 
 			// Try to send msg
-			tls_push_zerocopy(sk, sgin, pages, bytes, record_type);
+			tls_push_zerocopy(sk, sgin, pages, bytes, record_type, msg->msg_flags);
 			for (; pages > 0; pages--)
 				put_page(sg_page(&sgin[pages - 1]));
 			if (err < 0) {
@@ -463,7 +475,7 @@ reg_send:
 		ctx->unsent += copy;
 
 		if (ctx->unsent >= TLS_MAX_PAYLOAD_SIZE) {
-			ret = tls_push(sk, record_type);
+			ret = tls_push(sk, record_type, msg->msg_flags);
 			if (ret)
 				goto send_end;
 		}
@@ -471,10 +483,6 @@ reg_send:
 		continue;
 
 wait_for_memory:
-		ret = tls_push(sk, record_type);
-		if (ret)
-			goto send_end;
-//push_wait:
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 		ret = sk_stream_wait_memory(sk, &timeo);
 		if (ret)
@@ -482,7 +490,7 @@ wait_for_memory:
 	}
 
 	if (eor)
-		ret = tls_push(sk, record_type);
+		ret = tls_push(sk, record_type, msg->msg_flags);
 
 send_end:
 	ret = sk_stream_error(sk, msg->msg_flags, ret);
@@ -658,7 +666,7 @@ int tls_sw_sendpage(struct sock *sk, struct page *page,
 
 		if (!sk_stream_memory_free(sk) ||
 		    (ctx->unsent + send_size > TLS_MAX_PAYLOAD_SIZE)) {
-			ret = tls_push(sk, record_type);
+			ret = tls_push(sk, record_type, flags);
 			if (ret)
 				goto sendpage_end;
 			set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
@@ -687,7 +695,7 @@ int tls_sw_sendpage(struct sock *sk, struct page *page,
 
 				tskb = alloc_skb(0, sk->sk_allocation);
 				while (!tskb) {
-					ret = tls_push(sk, record_type);
+					ret = tls_push(sk, record_type, flags);
 					if (ret)
 						goto sendpage_end;
 					set_bit(SOCK_NOSPACE,
@@ -730,14 +738,14 @@ coalesced:
 		size -= send_size;
 
 		if (eor || ctx->unsent >= TLS_MAX_PAYLOAD_SIZE) {
-			ret = tls_push(sk, record_type);
+			ret = tls_push(sk, record_type, flags);
 			if (ret)
 				goto sendpage_end;
 		}
 	}
 
 	if (eor || ctx->unsent >= TLS_MAX_PAYLOAD_SIZE)
-		ret = tls_push(sk, record_type);
+		ret = tls_push(sk, record_type, flags);
 
 sendpage_end:
 	ret = sk_stream_error(sk, flags, ret);
