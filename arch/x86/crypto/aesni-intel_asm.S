@@ -220,6 +220,29 @@ ALL_F:      .octa 0xffffffffffffffffffffffffffffffff
 	mov	%r13, %r12
 .endm
 
+.macro GCM_FINISH ENC_DEC
+	mov	arg9, %r10                     # %r10 = authTag
+	mov	arg10, %r11                    # %r11 = auth_tag_len
+	cmp	$16, %r11
+	je	_T_16_\ENC_DEC
+	cmp	$12, %r11
+	je	_T_12_\ENC_DEC
+_T_8_\ENC_DEC:
+	MOVQ_R64_XMM	%xmm0, %rax
+	mov	%rax, (%r10)
+	jmp	_return_T_done_\ENC_DEC
+_T_12_\ENC_DEC:
+	MOVQ_R64_XMM	%xmm0, %rax
+	mov	%rax, (%r10)
+	psrldq	$8, %xmm0
+	movd	%xmm0, %eax
+	mov	%eax, 8(%r10)
+	jmp	_return_T_done_\ENC_DEC
+_T_16_\ENC_DEC:
+	movdqu	%xmm0, (%r10)
+_return_T_done_\ENC_DEC:
+.endm
+
 #ifdef __x86_64__
 /* GHASH_MUL MACRO to implement: Data*HashKey mod (128,127,126,121,0)
 *
@@ -1273,26 +1296,8 @@ _multiple_of_16_bytes_decrypt:
 	ENCRYPT_SINGLE_BLOCK	%xmm0,  %xmm1	  # E(K, Y0)
 	pxor	%xmm8, %xmm0
 _return_T_decrypt:
-	mov	arg9, %r10                # %r10 = authTag
-	mov	arg10, %r11               # %r11 = auth_tag_len
-	cmp	$16, %r11
-	je	_T_16_decrypt
-	cmp	$12, %r11
-	je	_T_12_decrypt
-_T_8_decrypt:
-	MOVQ_R64_XMM	%xmm0, %rax
-	mov	%rax, (%r10)
-	jmp	_return_T_done_decrypt
-_T_12_decrypt:
-	MOVQ_R64_XMM	%xmm0, %rax
-	mov	%rax, (%r10)
-	psrldq	$8, %xmm0
-	movd	%xmm0, %eax
-	mov	%eax, 8(%r10)
-	jmp	_return_T_done_decrypt
-_T_16_decrypt:
-	movdqu	%xmm0, (%r10)
-_return_T_done_decrypt:
+	GCM_FINISH DEC
+
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_dec)
@@ -1500,26 +1505,8 @@ _multiple_of_16_bytes_encrypt:
 	ENCRYPT_SINGLE_BLOCK	%xmm0, %xmm15         # Encrypt(K, Y0)
 	pxor	%xmm8, %xmm0
 _return_T_encrypt:
-	mov	arg9, %r10                     # %r10 = authTag
-	mov	arg10, %r11                    # %r11 = auth_tag_len
-	cmp	$16, %r11
-	je	_T_16_encrypt
-	cmp	$12, %r11
-	je	_T_12_encrypt
-_T_8_encrypt:
-	MOVQ_R64_XMM	%xmm0, %rax
-	mov	%rax, (%r10)
-	jmp	_return_T_done_encrypt
-_T_12_encrypt:
-	MOVQ_R64_XMM	%xmm0, %rax
-	mov	%rax, (%r10)
-	psrldq	$8, %xmm0
-	movd	%xmm0, %eax
-	mov	%eax, 8(%r10)
-	jmp	_return_T_done_encrypt
-_T_16_encrypt:
-	movdqu	%xmm0, (%r10)
-_return_T_done_encrypt:
+	GCM_FINISH ENC
+
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc)
