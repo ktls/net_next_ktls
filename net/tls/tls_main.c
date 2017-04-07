@@ -63,7 +63,7 @@ int tls_push_frags(struct sock *sk,
 	offset += frag->page_offset;
 
 	while (1) {
-		if (--num_frags)
+		if (!(--num_frags))
 			sendpage_flags = flags;
 
 		 /* is sending application-limited? */
