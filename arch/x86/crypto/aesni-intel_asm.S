@@ -216,6 +216,34 @@ aad_shift_arr:
 	pop	%r12
 .endm
 
+.macro GCM_INIT
+	mov	%arg6, %r12
+	movdqu	(%r12), %xmm13
+        movdqa  SHUF_MASK(%rip), %xmm2
+	PSHUFB_XMM %xmm2, %xmm13
+
+# precompute HashKey<<1 mod poly from the HashKey (required for GHASH)
+
+	movdqa	%xmm13, %xmm2
+	psllq	$1, %xmm13
+	psrlq	$63, %xmm2
+	movdqa	%xmm2, %xmm1
+	pslldq	$8, %xmm2
+	psrldq	$8, %xmm1
+	por	%xmm2, %xmm13
+
+        # reduce HashKey<<1
+
+	pshufd	$0x24, %xmm1, %xmm2
+	pcmpeqd TWOONE(%rip), %xmm2
+	pand	POLY(%rip), %xmm2
+	pxor	%xmm2, %xmm13
+	movdqa	%xmm13, HashKey(%rsp)
+	mov	%arg4, %r13            # %xmm13 holds HashKey<<1 (mod poly)
+	and	$-16, %r13
+	mov	%r13, %r12
+.endm
+
 #ifdef __x86_64__
 /* GHASH_MUL MACRO to implement: Data*HashKey mod (128,127,126,121,0)
 *
@@ -1182,29 +1210,8 @@ _esb_loop_\@:
 *****************************************************************************/
 ENTRY(aesni_gcm_dec)
 	FUNC_SAVE
-	mov	%arg6, %r12
-	movdqu	(%r12), %xmm13			  # %xmm13 = HashKey
-        movdqa  SHUF_MASK(%rip), %xmm2
-	PSHUFB_XMM %xmm2, %xmm13
 
-
-# Precompute HashKey<<1 (mod poly) from the hash key (required for GHASH)
-
-	movdqa	%xmm13, %xmm2
-	psllq	$1, %xmm13
-	psrlq	$63, %xmm2
-	movdqa	%xmm2, %xmm1
-	pslldq	$8, %xmm2
-	psrldq	$8, %xmm1
-	por	%xmm2, %xmm13
-
-        # Reduction
-
-	pshufd	$0x24, %xmm1, %xmm2
-	pcmpeqd TWOONE(%rip), %xmm2
-	pand	POLY(%rip), %xmm2
-	pxor	%xmm2, %xmm13     # %xmm13 holds the HashKey<<1 (mod poly)
-
+	GCM_INIT
 
         # Decrypt first few blocks
 
@@ -1447,32 +1454,8 @@ ENDPROC(aesni_gcm_dec)
 ***************************************************************************/
 ENTRY(aesni_gcm_enc)
 	FUNC_SAVE
-	mov	%arg6, %r12
-	movdqu	(%r12), %xmm13
-        movdqa  SHUF_MASK(%rip), %xmm2
-	PSHUFB_XMM %xmm2, %xmm13
 
-# precompute HashKey<<1 mod poly from the HashKey (required for GHASH)
-
-	movdqa	%xmm13, %xmm2
-	psllq	$1, %xmm13
-	psrlq	$63, %xmm2
-	movdqa	%xmm2, %xmm1
-	pslldq	$8, %xmm2
-	psrldq	$8, %xmm1
-	por	%xmm2, %xmm13
-
-        # reduce HashKey<<1
-
-	pshufd	$0x24, %xmm1, %xmm2
-	pcmpeqd TWOONE(%rip), %xmm2
-	pand	POLY(%rip), %xmm2
-	pxor	%xmm2, %xmm13
-	movdqa	%xmm13, HashKey(%rsp)
-	mov	%arg4, %r13            # %xmm13 holds HashKey<<1 (mod poly)
-	and	$-16, %r13
-	mov	%r13, %r12
-
+	GCM_INIT
         # Encrypt first few blocks
 
 	and	$(3<<4), %r12
