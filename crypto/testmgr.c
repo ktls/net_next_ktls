@@ -3269,14 +3269,8 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.fips_allowed = 1,
 		.suite = {
 			.aead = {
-				.enc = {
-					.vecs = aes_gcm_rfc5288_enc_tv_template,
-					.count = AES_GCM_5288_ENC_TEST_VECTORS
-				},
-				.dec = {
-					.vecs = aes_gcm_rfc5288_dec_tv_template,
-					.count = AES_GCM_5288_DEC_TEST_VECTORS
-				}
+				.enc = __VECS(aes_gcm_rfc5288_enc_tv_template),
+				.dec = __VECS(aes_gcm_rfc5288_dec_tv_template)
 			}
 		}
 	}, {
