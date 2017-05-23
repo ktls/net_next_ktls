@@ -394,6 +394,7 @@ static int tls_setsockopt(struct sock *sk, int level, int optname,
 void tls_sk_destruct(struct sock *sk, struct tls_context *ctx)
 {
 	ctx->sk_destruct(sk);
+	kfree(ctx->rec_seq);
 	kfree(ctx->iv);
 	kfree(ctx);
 }

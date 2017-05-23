@@ -647,7 +647,8 @@ void tls_sw_sk_destruct(struct sock *sk)
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
 
-	crypto_free_aead(ctx->aead_send);
+	if (ctx->aead_send)
+		crypto_free_aead(ctx->aead_send);
 
 	tls_free_both_sg(sk);
 	if (tls_ctx->partially_sent_record) {
@@ -669,8 +670,7 @@ void tls_sw_sk_destruct(struct sock *sk)
 
 int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 {
-	char keyval[TLS_CIPHER_AES_GCM_128_KEY_SIZE +
-		TLS_CIPHER_AES_GCM_128_SALT_SIZE];
+	char keyval[TLS_CIPHER_AES_GCM_128_KEY_SIZE];
 	struct tls_crypto_info *crypto_info;
 	struct tls12_crypto_info_aes_gcm_128 *gcm_128_info;
 	struct tls_sw_context *sw_ctx;
@@ -719,12 +719,14 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 	ctx->tag_size = tag_size;
 	ctx->overhead_size = ctx->prepend_size + ctx->tag_size;
 	ctx->iv_size = iv_size;
-	ctx->iv = kmalloc(iv_size, GFP_KERNEL);
+	ctx->iv = kmalloc(iv_size + TLS_CIPHER_AES_GCM_128_SALT_SIZE,
+			  GFP_KERNEL);
 	if (!ctx->iv) {
 		rc = -ENOMEM;
 		goto out;
 	}
-	memcpy(ctx->iv, iv, iv_size);
+	memcpy(ctx->iv, gcm_128_info->salt, TLS_CIPHER_AES_GCM_128_SALT_SIZE);
+	memcpy(ctx->iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE, iv, iv_size);
 	ctx->rec_seq_size = rec_seq_size;
 	ctx->rec_seq = kmalloc(rec_seq_size, GFP_KERNEL);
 	if (!ctx->rec_seq) {
@@ -750,8 +752,7 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 	sg_chain(sw_ctx->sg_aead_out, 2, sw_ctx->sg_encrypted_data);
 
 	if (!sw_ctx->aead_send) {
-		sw_ctx->aead_send = crypto_alloc_aead("gcm(aes)",
-						      CRYPTO_ALG_INTERNAL, 0);
+		sw_ctx->aead_send = crypto_alloc_aead("gcm(aes)", 0, 0);
 		if (IS_ERR(sw_ctx->aead_send)) {
 			rc = PTR_ERR(sw_ctx->aead_send);
 			sw_ctx->aead_send = NULL;
@@ -763,12 +764,9 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 	ctx->push_pending_record = tls_sw_push_pending_record;
 
 	memcpy(keyval, gcm_128_info->key, TLS_CIPHER_AES_GCM_128_KEY_SIZE);
-	memcpy(keyval + TLS_CIPHER_AES_GCM_128_KEY_SIZE, gcm_128_info->salt,
-	       TLS_CIPHER_AES_GCM_128_SALT_SIZE);
 
 	rc = crypto_aead_setkey(sw_ctx->aead_send, keyval,
-				TLS_CIPHER_AES_GCM_128_KEY_SIZE +
-				TLS_CIPHER_AES_GCM_128_SALT_SIZE);
+				TLS_CIPHER_AES_GCM_128_KEY_SIZE);
 	if (rc)
 		goto free_aead;
 
@@ -778,10 +776,13 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx)
 
 free_aead:
 	crypto_free_aead(sw_ctx->aead_send);
+	sw_ctx->aead_send = NULL;
 free_rec_seq:
 	kfree(ctx->rec_seq);
+	ctx->rec_seq = NULL;
 free_iv:
 	kfree(ctx->iv);
+	ctx->iv = NULL;
 out:
 	return rc;
 }

@@ -49,7 +49,7 @@
 
 #define TLS_RECORD_TYPE_DATA		0x17
 
-#define TLS_AAD_SPACE_SIZE		21
+#define TLS_AAD_SPACE_SIZE		13
 
 struct tls_sw_context {
 	struct crypto_aead *aead_send;
@@ -172,7 +172,8 @@ static inline void tls_advance_record_sn(struct sock *sk,
 {
 	if (tls_bigint_increment(ctx->rec_seq, ctx->rec_seq_size))
 		tls_err_abort(sk);
-	tls_bigint_increment(ctx->iv, ctx->iv_size);
+	tls_bigint_increment(ctx->iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE,
+			     ctx->iv_size);
 }
 
 static inline void tls_fill_prepend(struct tls_context *ctx,
@@ -193,7 +194,8 @@ static inline void tls_fill_prepend(struct tls_context *ctx,
 	/* we can use IV for nonce explicit according to spec */
 	buf[3] = pkt_len >> 8;
 	buf[4] = pkt_len & 0xFF;
-	memcpy(buf + TLS_NONCE_OFFSET, ctx->iv, iv_size);
+	memcpy(buf + TLS_NONCE_OFFSET,
+	       ctx->iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE, iv_size);
 }
 
 static inline struct tls_context *tls_get_ctx(const struct sock *sk)
