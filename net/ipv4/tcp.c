@@ -1013,7 +1013,7 @@ out_err:
 	}
 	return sk_stream_error(sk, flags, err);
 }
-EXPORT_SYMBOL(do_tcp_sendpages);
+EXPORT_SYMBOL_GPL(do_tcp_sendpages);
 
 int tcp_sendpage(struct sock *sk, struct page *page, int offset,
 		 size_t size, int flags)
