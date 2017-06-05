@@ -555,7 +555,6 @@ int tls_sw_sendpage(struct sock *sk, struct page *page,
 
 	lock_sock(sk);
 
-
 	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 	if (tls_is_pending_closed_record(tls_ctx)) {
