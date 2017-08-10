@@ -48,10 +48,13 @@ MODULE_LICENSE("Dual BSD/GPL");
 enum {
 	TLS_BASE_TX,
 	TLS_SW_TX,
+	TLS_SW_RX,
+	TLS_SW_RXTX,
 	TLS_NUM_CONFIG,
 };
 
 static struct proto tls_prots[TLS_NUM_CONFIG];
+static struct proto_ops tls_sw_proto_ops;
 
 static inline void update_sk_prot(struct sock *sk, struct tls_context *ctx)
 {
@@ -251,9 +254,14 @@ static void tls_sk_proto_close(struct sock *sk, long timeout)
 
 	kfree(ctx->tx.rec_seq);
 	kfree(ctx->tx.iv);
+	kfree(ctx->rx.rec_seq);
+	kfree(ctx->rx.iv);
 
-	if (ctx->tx_conf == TLS_SW_TX)
-		tls_sw_free_tx_resources(sk);
+	if (ctx->tx_conf == TLS_SW_TX ||
+	    ctx->tx_conf == TLS_SW_RX ||
+	    ctx->tx_conf == TLS_SW_RXTX) {
+		tls_sw_free_resources(sk);
+	}
 
 skip_tx_cleanup:
 	release_sock(sk);
@@ -352,8 +360,8 @@ static int tls_getsockopt(struct sock *sk, int level, int optname,
 	return do_tls_getsockopt(sk, optname, optval, optlen);
 }
 
-static int do_tls_setsockopt_tx(struct sock *sk, char __user *optval,
-				unsigned int optlen)
+static int do_tls_setsockopt_conf(struct sock *sk, char __user *optval,
+				  unsigned int optlen, int tx)
 {
 	struct tls_crypto_info *crypto_info;
 	struct tls_context *ctx = tls_get_ctx(sk);
@@ -365,7 +373,11 @@ static int do_tls_setsockopt_tx(struct sock *sk, char __user *optval,
 		goto out;
 	}
 
-	crypto_info = &ctx->crypto_send;
+	if (tx)
+		crypto_info = &ctx->crypto_send;
+	else
+		crypto_info = &ctx->crypto_recv;
+
 	/* Currently we don't support set crypto info more than one time */
 	if (TLS_CRYPTO_INFO_READY(crypto_info)) {
 		rc = -EBUSY;
@@ -404,15 +416,31 @@ static int do_tls_setsockopt_tx(struct sock *sk, char __user *optval,
 	}
 
 	/* currently SW is default, we will have ethtool in future */
-	rc = tls_set_sw_offload(sk, ctx);
-	tx_conf = TLS_SW_TX;
+	if (tx) {
+		rc = tls_set_sw_offload(sk, ctx, 1);
+		if (ctx->tx_conf == TLS_SW_RX)
+			tx_conf = TLS_SW_RXTX;
+		else
+			tx_conf = TLS_SW_TX;
+	} else {
+		rc = tls_set_sw_offload(sk, ctx, 0);
+		if (ctx->tx_conf == TLS_SW_TX)
+			tx_conf = TLS_SW_RXTX;
+		else
+			tx_conf = TLS_SW_RX;
+	}
+
 	if (rc)
 		goto err_crypto_info;
 
 	ctx->tx_conf = tx_conf;
 	update_sk_prot(sk, ctx);
-	ctx->sk_write_space = sk->sk_write_space;
-	sk->sk_write_space = tls_write_space;
+	if (tx) {
+		ctx->sk_write_space = sk->sk_write_space;
+		sk->sk_write_space = tls_write_space;
+	} else {
+		sk->sk_socket->ops = &tls_sw_proto_ops;
+	}
 	goto out;
 
 err_crypto_info:
@@ -428,8 +456,10 @@ static int do_tls_setsockopt(struct sock *sk, int optname,
 
 	switch (optname) {
 	case TLS_TX:
+	case TLS_RX:
 		lock_sock(sk);
-		rc = do_tls_setsockopt_tx(sk, optval, optlen);
+		rc = do_tls_setsockopt_conf(sk, optval, optlen,
+					    optname == TLS_TX);
 		release_sock(sk);
 		break;
 	default:
@@ -498,11 +528,23 @@ static void build_protos(struct proto *prot, struct proto *base)
 	prot[TLS_SW_TX] = prot[TLS_BASE_TX];
 	prot[TLS_SW_TX].sendmsg		= tls_sw_sendmsg;
 	prot[TLS_SW_TX].sendpage	= tls_sw_sendpage;
+
+	prot[TLS_SW_RX] = prot[TLS_BASE_TX];
+	prot[TLS_SW_RX].recvmsg		= tls_sw_recvmsg;
+	prot[TLS_SW_RX].close		= tls_sk_proto_close;
+
+	prot[TLS_SW_RXTX] = prot[TLS_SW_TX];
+	prot[TLS_SW_RXTX].recvmsg	= tls_sw_recvmsg;
+	prot[TLS_SW_RXTX].close		= tls_sk_proto_close;
 }
 
 static int __init tls_register(void)
 {
 	build_protos(tls_prots, &tcp_prot);
+
+	tls_sw_proto_ops = inet_stream_ops;
+	tls_sw_proto_ops.poll = tls_sw_poll;
+	tls_sw_proto_ops.splice_read = tls_sw_splice_read;
 
 	tcp_register_ulp(&tcp_tls_ulp_ops);
 
