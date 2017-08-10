@@ -35,6 +35,7 @@
 #define _TLS_OFFLOAD_H
 
 #include <linux/types.h>
+#include <net/strparser.h>
 
 #include <uapi/linux/tls.h>
 
@@ -53,6 +54,16 @@
 
 struct tls_sw_context {
 	struct crypto_aead *aead_send;
+	struct crypto_aead *aead_recv;
+
+	/* Receive context */
+	struct strparser strp;
+	void (*saved_data_ready)(struct sock *sk);
+	unsigned int (*sk_poll)(struct file *file, struct socket *sock,
+				struct poll_table_struct *wait);
+	struct sk_buff *recv_pkt;
+	u16 recv_len;
+	int control;
 
 	/* Sending context */
 	char aad_space[TLS_AAD_SPACE_SIZE];
@@ -69,6 +80,9 @@ struct tls_sw_context {
 	struct scatterlist sg_aead_in[2];
 	/* AAD | sg_encrypted_data (data contain overhead for hdr&iv&tag) */
 	struct scatterlist sg_aead_out[2];
+
+	struct scatterlist sgin[MAX_SKB_FRAGS + 1]; // ALG_MAX_PAGES
+	char aad_recv[TLS_AAD_SPACE_SIZE];
 };
 
 enum {
@@ -90,10 +104,15 @@ struct tls_context {
 		struct tls_crypto_info crypto_send;
 		struct tls12_crypto_info_aes_gcm_128 crypto_send_aes_gcm_128;
 	};
+	union {
+		struct tls_crypto_info crypto_recv;
+		struct tls12_crypto_info_aes_gcm_128 crypto_recv_aes_gcm_128;
+	};
 
 	void *priv_ctx;
 
 	struct cipher_context tx;
+	struct cipher_context rx;
 
 	struct scatterlist *partially_sent_record;
 	u16 partially_sent_offset;
@@ -121,11 +140,23 @@ int tls_sk_attach(struct sock *sk, int optname, char __user *optval,
 		  unsigned int optlen);
 
 
-int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx);
+int tls_set_sw_offload_tx(struct sock *sk, struct tls_context *ctx);
+int tls_set_sw_offload_rx(struct sock *sk, struct tls_context *ctx);
 int tls_sw_sendmsg(struct sock *sk, struct msghdr *msg, size_t size);
 int tls_sw_sendpage(struct sock *sk, struct page *page,
 		    int offset, size_t size, int flags);
 void tls_sw_close(struct sock *sk, long timeout);
+int tls_sw_recvmsg(struct sock *sk,
+		struct msghdr *msg,
+		size_t len,
+		int nonblock,
+		int flags,
+		int *addr_len);
+unsigned int tls_sw_poll(struct file *file, struct socket *sock,
+			struct poll_table_struct *wait);
+ssize_t tls_sw_splice_read(struct socket *sock,  loff_t *ppos,
+			       struct pipe_inode_info *pipe,
+			size_t len, unsigned int flags);
 
 void tls_sk_destruct(struct sock *sk, struct tls_context *ctx);
 void tls_icsk_clean_acked(struct sock *sk);

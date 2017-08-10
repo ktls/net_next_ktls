@@ -47,6 +47,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 static struct proto tls_base_prot;
 static struct proto tls_sw_prot;
+static struct proto_ops tls_sw_proto_ops;
 
 int wait_on_pending_writer(struct sock *sk, long *timeo)
 {
@@ -236,6 +237,9 @@ static void tls_sk_proto_close(struct sock *sk, long timeout)
 	kfree(ctx->tx.rec_seq);
 	kfree(ctx->tx.iv);
 
+	kfree(ctx->rx.rec_seq);
+	kfree(ctx->rx.iv);
+
 	sk_proto_close = ctx->sk_proto_close;
 	kfree(ctx);
 
@@ -395,12 +399,88 @@ static int do_tls_setsockopt_tx(struct sock *sk, char __user *optval,
 	ctx->sk_proto_close = sk->sk_prot->close;
 
 	/* currently SW is default, we will have ethtool in future */
-	rc = tls_set_sw_offload(sk, ctx);
+	rc = tls_set_sw_offload_tx(sk, ctx);
 	prot = &tls_sw_prot;
 	if (rc)
 		goto err_crypto_info;
 
 	sk->sk_prot = prot;
+	goto out;
+
+err_crypto_info:
+	memset(crypto_info, 0, sizeof(*crypto_info));
+out:
+	return rc;
+}
+
+static int do_tls_setsockopt_rx(struct sock *sk, char __user *optval,
+				unsigned int optlen)
+{
+	struct tls_crypto_info *crypto_info, tmp_crypto_info;
+	struct tls_context *ctx = tls_get_ctx(sk);
+	struct proto *prot = NULL;
+	int rc = 0;
+
+	if (!optval || (optlen < sizeof(*crypto_info))) {
+		rc = -EINVAL;
+		goto out;
+	}
+
+	rc = copy_from_user(&tmp_crypto_info, optval, sizeof(*crypto_info));
+	if (rc) {
+		rc = -EFAULT;
+		goto out;
+	}
+
+	/* check version */
+	if (tmp_crypto_info.version != TLS_1_2_VERSION) {
+		rc = -ENOTSUPP;
+		goto out;
+	}
+
+	/* get user crypto info */
+	crypto_info = &ctx->crypto_recv;
+
+	/* Currently we don't support set crypto info more than one time */
+	// TODO if (TLS_CRYPTO_INFO_READY(crypto_info))
+	// goto out;
+
+	switch (tmp_crypto_info.cipher_type) {
+	case TLS_CIPHER_AES_GCM_128: {
+		if (optlen != sizeof(struct tls12_crypto_info_aes_gcm_128)) {
+			rc = -EINVAL;
+			goto out;
+		}
+		rc = copy_from_user(
+		  crypto_info,
+		  optval,
+		  sizeof(struct tls12_crypto_info_aes_gcm_128));
+
+		if (rc) {
+			rc = -EFAULT;
+			goto err_crypto_info;
+		}
+		break;
+	}
+	default:
+		rc = -EINVAL;
+		goto out;
+	}
+
+	//TODO
+/* ctx->sk_write_space = sk->sk_write_space; */
+	/* sk->sk_write_space = tls_write_space; */
+
+	//ctx->sk_proto_close = sk->sk_prot->close;
+
+	/* currently SW is default, we will have ethtool in future */
+	rc = tls_set_sw_offload_rx(sk, ctx);
+	prot = &tls_sw_prot;
+	if (rc)
+		goto err_crypto_info;
+
+	sk->sk_prot = prot;
+	sk->sk_socket->ops = &tls_sw_proto_ops;
 	goto out;
 
 err_crypto_info:
@@ -418,6 +498,11 @@ static int do_tls_setsockopt(struct sock *sk, int optname,
 	case TLS_TX:
 		lock_sock(sk);
 		rc = do_tls_setsockopt_tx(sk, optval, optlen);
+		release_sock(sk);
+		break;
+	case TLS_RX:
+		lock_sock(sk);
+		rc = do_tls_setsockopt_rx(sk, optval, optlen);
 		release_sock(sk);
 		break;
 	default:
@@ -473,7 +558,12 @@ static int __init tls_register(void)
 	tls_sw_prot			= tls_base_prot;
 	tls_sw_prot.sendmsg		= tls_sw_sendmsg;
 	tls_sw_prot.sendpage            = tls_sw_sendpage;
+	tls_sw_prot.recvmsg             = tls_sw_recvmsg;
 	tls_sw_prot.close               = tls_sk_proto_close;
+
+	tls_sw_proto_ops = inet_stream_ops;
+	tls_sw_proto_ops.poll = tls_sw_poll;
+	tls_sw_proto_ops.splice_read = tls_sw_splice_read;
 
 	tcp_register_ulp(&tcp_tls_ulp_ops);
 
