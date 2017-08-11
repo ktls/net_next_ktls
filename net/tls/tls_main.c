@@ -564,6 +564,8 @@ static int __init tls_register(void)
 	tls_sw_proto_ops = inet_stream_ops;
 	tls_sw_proto_ops.poll = tls_sw_poll;
 	tls_sw_proto_ops.splice_read = tls_sw_splice_read;
+	tls_sw_proto_ops.read_sock = tls_sw_read_sock;
+	tls_sw_proto_ops.peek_len = tls_sw_peek_len;
 
 	tcp_register_ulp(&tcp_tls_ulp_ops);
 

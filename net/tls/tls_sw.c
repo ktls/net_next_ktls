@@ -843,6 +843,80 @@ decryption_fail:
 	return ret;
 }
 
+int tls_sw_read_sock(struct sock *sk, read_descriptor_t *desc,
+			 sk_read_actor_t recv_actor) {
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
+	struct strp_rx_msg *rxm;
+	struct sk_buff *skb = NULL;
+	int err = 0;
+	int used;
+	int copied = 0;
+
+	printk("tls_read_sock\n");
+
+	while ((skb = tls_wait_data(sk, MSG_DONTWAIT, 0, &err)) != NULL) {
+		rxm = strp_rx_msg(skb);
+		printk("Got skb %p %p\n", skb, rxm);
+
+		if (!tls_rx_msg(skb)->decrypted) {
+			printk("decrypting\n");
+			err = decrypt_skb(sk, skb, NULL);
+			printk("err is %i\n", err);
+			if (err == -EINPROGRESS) {
+				// TODO must install callback
+				err = 0;
+				skb = NULL;
+				goto recv_end;
+			}
+			if (err < 0) {
+				tls_err_abort(sk);
+				goto recv_end;
+			}
+		}
+		printk("with data %i\n", rxm->full_len);
+		used = recv_actor(desc, skb, 0, rxm->full_len);
+		printk("Used %i\n", used);
+		copied += used;
+
+		if (used < rxm->full_len) {
+			printk("didn't use full\n");
+			rxm->full_len -= used;
+			rxm->offset += used;
+			break;
+		}
+
+		printk("Used full, free skb\n");
+		ctx->recv_pkt = NULL;
+		kfree_skb(skb);
+		strp_unpause(&ctx->strp);
+		if (!desc->count)
+			break;
+	}
+
+recv_end:
+	if (!skb)
+		err = 0;
+	printk("Returning from tls_read_sock %i\n", err ?: copied);
+	return err ?: copied;
+}
+
+int tls_sw_peek_len(struct socket *sock)
+{
+	struct tls_context *tls_ctx = tls_get_ctx(sock->sk);
+	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
+	struct strp_rx_msg *rxm;
+
+	if (!ctx->recv_pkt) {
+		printk("tls_peek_len 0\n");
+		return 0;
+	}
+
+	rxm = strp_rx_msg(ctx->recv_pkt);
+	printk("tls_peek_len %i\n", rxm->full_len);
+	return rxm->full_len;
+}
+
 int tls_sw_recvmsg(struct sock *sk,
 		   struct msghdr *msg,
 		   size_t len,
@@ -1383,6 +1457,7 @@ int tls_set_sw_offload_rx(struct sock *sk, struct tls_context *ctx)
 	cb.abort_parser = tls_abort_cb;
 	cb.parse_msg = tls_parse_cb;
 	cb.read_sock_done = NULL;
+	cb.read_sock = sk->sk_socket->ops->read_sock;
 
 	strp_init(&sw_ctx->strp, sk, &cb);
 
@@ -1392,6 +1467,7 @@ int tls_set_sw_offload_rx(struct sock *sk, struct tls_context *ctx)
 	write_unlock_bh(&sk->sk_callback_lock);
 
 	sw_ctx->sk_poll = sk->sk_socket->ops->poll;
+	sw_ctx->sk_read_sock = sk->sk_socket->ops->read_sock;
 
 	strp_check_rcv(&sw_ctx->strp);
 

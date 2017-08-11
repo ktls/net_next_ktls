@@ -48,6 +48,8 @@ struct strp_callbacks {
 	void (*rcv_msg)(struct strparser *strp, struct sk_buff *skb);
 	int (*read_sock_done)(struct strparser *strp, int err);
 	void (*abort_parser)(struct strparser *strp, int err);
+	int (*read_sock)(struct sock *sk, read_descriptor_t *desc,
+				sk_read_actor_t recv_actor);
 };
 
 struct strp_rx_msg {

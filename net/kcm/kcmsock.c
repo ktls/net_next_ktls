@@ -1395,6 +1395,7 @@ static int kcm_attach(struct socket *sock, struct socket *csock,
 	cb.abort_parser = NULL;
 	cb.parse_msg = kcm_parse_func_strparser;
 	cb.read_sock_done = kcm_read_sock_done;
+	cb.read_sock = NULL;
 
 	err = strp_init(&psock->strp, csk, &cb);
 	if (err) {
@@ -2092,4 +2093,3 @@ module_exit(kcm_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_NETPROTO(PF_KCM);
-

@@ -61,6 +61,8 @@ struct tls_sw_context {
 	void (*saved_data_ready)(struct sock *sk);
 	unsigned int (*sk_poll)(struct file *file, struct socket *sock,
 				struct poll_table_struct *wait);
+	int (*sk_read_sock)(struct sock *sk, read_descriptor_t *desc,
+				sk_read_actor_t recv_actor);
 	struct sk_buff *recv_pkt;
 	u16 recv_len;
 	int control;
@@ -157,6 +159,9 @@ unsigned int tls_sw_poll(struct file *file, struct socket *sock,
 ssize_t tls_sw_splice_read(struct socket *sock,  loff_t *ppos,
 			       struct pipe_inode_info *pipe,
 			size_t len, unsigned int flags);
+int tls_sw_read_sock(struct sock *sk, read_descriptor_t *desc,
+		sk_read_actor_t recv_actor);
+int tls_sw_peek_len(struct socket *sock);
 
 void tls_sk_destruct(struct sock *sk, struct tls_context *ctx);
 void tls_icsk_clean_acked(struct sock *sk);
