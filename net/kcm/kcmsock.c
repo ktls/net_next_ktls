@@ -349,6 +349,7 @@ static void psock_data_ready(struct sock *sk)
 	read_lock_bh(&sk->sk_callback_lock);
 
 	psock = (struct kcm_psock *)sk->sk_user_data;
+	printk("kcm_data_ready\n");
 	if (likely(psock))
 		strp_data_ready(&psock->strp);
 
@@ -1406,11 +1407,12 @@ static int kcm_attach(struct socket *sock, struct socket *csock,
 	sock_hold(csk);
 
 	write_lock_bh(&csk->sk_callback_lock);
-	psock->save_data_ready = csk->sk_data_ready;
+	//psock->save_data_ready = csk->sk_data_ready;
+	psock->save_data_ready = csk->sk_change_data_ready(csk, psock_data_ready);
 	psock->save_write_space = csk->sk_write_space;
 	psock->save_state_change = csk->sk_state_change;
 	csk->sk_user_data = psock;
-	csk->sk_data_ready = psock_data_ready;
+	//csk->sk_data_ready = psock_data_ready;
 	csk->sk_write_space = psock_write_space;
 	csk->sk_state_change = psock_state_change;
 	write_unlock_bh(&csk->sk_callback_lock);

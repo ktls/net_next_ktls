@@ -355,6 +355,7 @@ static int strp_read_sock(struct strparser *strp)
 /* Lower sock lock held */
 void strp_data_ready(struct strparser *strp)
 {
+	printk("strp_data_ready\n");
 	if (unlikely(strp->rx_stopped))
 		return;
 

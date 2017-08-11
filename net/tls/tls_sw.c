@@ -119,7 +119,8 @@ static int tls_do_decryption(struct sock *sk,
 	}
 	tls_post_process(sk, skb);
 	kfree(aead_req);
-	ctx->saved_data_ready(sk);
+	printk("tls_do_decryption data ready\n");
+	//ctx->saved_data_ready(sk);
 
 	return ret;
 }
@@ -633,6 +634,8 @@ int tls_sw_sendpage(struct sock *sk, struct page *page,
 	bool full_record;
 	int record_room;
 
+	printk("tls_sw_sendpage\n");
+
 	if (flags & ~(MSG_MORE | MSG_DONTWAIT | MSG_NOSIGNAL |
 		      MSG_SENDPAGE_NOTLAST))
 		return -ENOTSUPP;
@@ -640,21 +643,24 @@ int tls_sw_sendpage(struct sock *sk, struct page *page,
 	/* No MSG_EOR from splice, only look at MSG_MORE */
 	eor = !(flags & (MSG_MORE | MSG_SENDPAGE_NOTLAST));
 
+	printk("tls_sw_sendpage1\n");
 	lock_sock(sk);
-
+	printk("tls_sw_sendpage2\n");
 	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 	if (tls_complete_pending_work(sk, tls_ctx, flags, &timeo))
 		goto sendpage_end;
 
+	printk("tls_sw_sendpage3\n");
 	/* Call the sk_stream functions to manage the sndbuf mem. */
 	while (size > 0) {
 		size_t copy, required_size;
 
-		if (sk->sk_err) {
-			ret = sk->sk_err;
-			goto sendpage_end;
-		}
+		/* if (sk->sk_err) { */
+		/* 	sk->sk_err = 0; */
+		/* 	ret = sk->sk_err; */
+		/* 	goto sendpage_end; */
+		/* } */
 
 		full_record = false;
 		record_room = TLS_MAX_PAYLOAD_SIZE - ctx->sg_plaintext_size;
@@ -727,9 +733,11 @@ sendpage_end:
 	if (orig_size > size)
 		ret = orig_size - size;
 	else
-		ret = sk_stream_error(sk, flags, ret);
+		ret = ret;//ret = sk_stream_error(sk, flags, ret);
 
+	printk("tls_sw_sendpage4\n");
 	release_sock(sk);
+	printk("tls_sw_sendpage5 %i %i %i\n", ret, orig_size ,size);
 	return ret;
 }
 
@@ -744,6 +752,9 @@ static struct sk_buff *tls_wait_data(struct sock *sk, int flags,
 	while (!(skb = ctx->recv_pkt)) {
 		if (sk->sk_err) {
 			*err = -sk->sk_err;
+			printk("sk err %i\n", *err);
+			*err = 0;
+			sk->sk_err = 0;
 			return NULL;
 		}
 
@@ -752,6 +763,7 @@ static struct sk_buff *tls_wait_data(struct sock *sk, int flags,
 
 		if ((flags & MSG_DONTWAIT) || !timeo) {
 			*err = -EAGAIN;
+			printk("sk err eagain %i\n", *err);
 			return NULL;
 		}
 
@@ -766,6 +778,7 @@ static struct sk_buff *tls_wait_data(struct sock *sk, int flags,
 		/* Handle signals */
 		if (signal_pending(current)) {
 			*err = sock_intr_errno(timeo);
+			printk("sk err signal %i\n", *err);
 			return NULL;
 		}
 	}
@@ -901,7 +914,7 @@ recv_end:
 	return err ?: copied;
 }
 
-int tls_sw_peek_len(struct socket *sock)
+int tls_peek_len(struct socket *sock)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sock->sk);
 	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
@@ -1196,6 +1209,8 @@ static void tls_queue(struct strparser *strp, struct sk_buff *skb)
 	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
 	struct strp_rx_msg *rxm;
 
+	printk("tls_queue\n");
+
 	rxm = strp_rx_msg(skb);
 
 	tls_rx_msg(skb)->decrypted = 0;
@@ -1204,7 +1219,9 @@ static void tls_queue(struct strparser *strp, struct sk_buff *skb)
 	ctx->recv_pkt = skb;
 	strp_pause(strp);
 
+	printk("state change\n");
 	strp->sk->sk_state_change(strp->sk);
+	ctx->saved_data_ready(strp->sk);
 }
 
 /* Called with lower socket held */
@@ -1212,6 +1229,7 @@ static void tls_data_ready(struct sock *sk)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
+	printk("tls_data_ready\n");
 
 	strp_data_ready(&ctx->strp);
 }
@@ -1362,6 +1380,18 @@ out:
 	return rc;
 }
 
+
+static void(*tls_change_data_ready(struct sock *sk, void (*data_ready)(struct sock*sk)))(struct sock*) {
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
+
+	void (*cur_data_ready)(struct sock*) = ctx->saved_data_ready;
+
+	ctx->saved_data_ready = data_ready;
+
+	return cur_data_ready;
+}
+
 int tls_set_sw_offload_rx(struct sock *sk, struct tls_context *ctx)
 {
 	char keyval[TLS_CIPHER_AES_GCM_128_KEY_SIZE];
@@ -1458,13 +1488,6 @@ int tls_set_sw_offload_rx(struct sock *sk, struct tls_context *ctx)
 	cb.parse_msg = tls_parse_cb;
 	cb.read_sock_done = NULL;
 	cb.read_sock = sk->sk_socket->ops->read_sock;
-
-	strp_init(&sw_ctx->strp, sk, &cb);
-
-	write_lock_bh(&sk->sk_callback_lock);
-	sw_ctx->saved_data_ready = sk->sk_data_ready;
-	sk->sk_data_ready = tls_data_ready;
-	write_unlock_bh(&sk->sk_callback_lock);
 
 	sw_ctx->sk_poll = sk->sk_socket->ops->poll;
 	sw_ctx->sk_read_sock = sk->sk_socket->ops->read_sock;

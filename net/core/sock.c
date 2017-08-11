@@ -2555,6 +2555,12 @@ static void sock_def_error_report(struct sock *sk)
 	rcu_read_unlock();
 }
 
+static  void(*sock_def_change_data_ready(struct sock *sk, void (*data_ready)(struct sock*sk)))(struct sock*) {
+	void(*ret)(struct sock*) = sk->sk_data_ready;
+	sk->sk_data_ready = data_ready;
+	return ret;
+}
+
 static void sock_def_readable(struct sock *sk)
 {
 	struct socket_wq *wq;
@@ -2656,6 +2662,7 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 			af_family_clock_key_strings[sk->sk_family]);
 
 	sk->sk_state_change	=	sock_def_wakeup;
+	sk->sk_change_data_ready =      sock_def_change_data_ready;
 	sk->sk_data_ready	=	sock_def_readable;
 	sk->sk_write_space	=	sock_def_write_space;
 	sk->sk_error_report	=	sock_def_error_report;
