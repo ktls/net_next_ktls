@@ -192,12 +192,12 @@ static inline bool tls_bigint_increment(unsigned char *seq, int len)
 }
 
 static inline void tls_advance_record_sn(struct sock *sk,
-					 struct tls_context *ctx)
+					 struct cipher_context *ctx)
 {
-	if (tls_bigint_increment(ctx->tx.rec_seq, ctx->tx.rec_seq_size))
+	if (tls_bigint_increment(ctx->rec_seq, ctx->rec_seq_size))
 		tls_err_abort(sk);
-	tls_bigint_increment(ctx->tx.iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE,
-			     ctx->tx.iv_size);
+	tls_bigint_increment(ctx->iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE,
+			     ctx->iv_size);
 }
 
 static inline void tls_fill_prepend(struct tls_context *ctx,

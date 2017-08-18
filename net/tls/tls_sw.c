@@ -267,7 +267,7 @@ static int tls_push_record(struct sock *sk, int flags,
 	if (rc < 0 && rc != -EAGAIN)
 		tls_err_abort(sk);
 
-	tls_advance_record_sn(sk, tls_ctx);
+	tls_advance_record_sn(sk, &tls_ctx->tx);
 	return rc;
 }
 
