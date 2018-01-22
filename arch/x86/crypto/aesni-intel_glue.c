@@ -646,6 +646,29 @@ static void rfc4106_exit(struct crypto_aead *aead)
 	cryptd_free_aead(*ctx);
 }
 
+static int generic_gcmaes_init(struct crypto_aead *aead)
+{
+	struct cryptd_aead *cryptd_tfm;
+	struct cryptd_aead **ctx = crypto_aead_ctx(aead);
+
+	cryptd_tfm = cryptd_alloc_aead("__driver-generic-gcm-aes-aesni",
+				       CRYPTO_ALG_INTERNAL,
+				       CRYPTO_ALG_INTERNAL);
+	if (IS_ERR(cryptd_tfm))
+		return PTR_ERR(cryptd_tfm);
+
+	*ctx = cryptd_tfm;
+	crypto_aead_set_reqsize(aead, crypto_aead_reqsize(&cryptd_tfm->base));
+	return 0;
+}
+
+static void generic_gcmaes_exit(struct crypto_aead *aead)
+{
+	struct cryptd_aead **ctx = crypto_aead_ctx(aead);
+
+	cryptd_free_aead(*ctx);
+}
+
 static int
 rfc4106_set_hash_subkey(u8 *hash_subkey, const u8 *key, unsigned int key_len)
 {
@@ -699,6 +722,16 @@ static int rfc4106_set_key(struct crypto_aead *parent, const u8 *key,
 	return crypto_aead_setkey(&cryptd_tfm->base, key, key_len);
 }
 
+static int generic_gcmaes_set_key(struct crypto_aead *parent, const u8 *key,
+			   unsigned int key_len)
+{
+	struct cryptd_aead **ctx = crypto_aead_ctx(parent);
+	struct cryptd_aead *cryptd_tfm = *ctx;
+
+	return crypto_aead_setkey(&cryptd_tfm->base, key, key_len);
+}
+
+
 static int common_rfc4106_set_authsize(struct crypto_aead *aead,
 				       unsigned int authsize)
 {
@@ -725,7 +758,16 @@ static int rfc4106_set_authsize(struct crypto_aead *parent,
 	return crypto_aead_setauthsize(&cryptd_tfm->base, authsize);
 }
 
-static int generic_gcmaes_set_authsize(struct crypto_aead *tfm,
+static int generic_gcmaes_set_authsize(struct crypto_aead *parent,
+				unsigned int authsize)
+{
+	struct cryptd_aead **ctx = crypto_aead_ctx(parent);
+	struct cryptd_aead *cryptd_tfm = *ctx;
+
+	return crypto_aead_setauthsize(&cryptd_tfm->base, authsize);
+}
+
+static int helper_generic_gcmaes_set_authsize(struct crypto_aead *tfm,
 				       unsigned int authsize)
 {
 	switch (authsize) {
@@ -753,6 +795,7 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 	unsigned long auth_tag_len = crypto_aead_authsize(tfm);
 	struct scatter_walk src_sg_walk;
 	struct scatter_walk dst_sg_walk = {};
+	printk("gcmaes_encrypt\n");
 
 	if (sg_is_last(req->src) &&
 	    (!PageHighMem(sg_page(req->src)) ||
@@ -884,6 +927,7 @@ static int helper_rfc4106_encrypt(struct aead_request *req)
 	u8 iv[16] __attribute__ ((__aligned__(AESNI_ALIGN)));
 	unsigned int i;
 	__be32 counter = cpu_to_be32(1);
+	printk("helper_rfc4106_encrypt\n");
 
 	/* Assuming we are supporting rfc4106 64-bit extended */
 	/* sequence numbers We need to have the AAD length equal */
@@ -935,6 +979,8 @@ static int rfc4106_encrypt(struct aead_request *req)
 	struct cryptd_aead **ctx = crypto_aead_ctx(tfm);
 	struct cryptd_aead *cryptd_tfm = *ctx;
 
+	printk("rfc4106 encrypt\n");
+
 	tfm = &cryptd_tfm->base;
 	if (irq_fpu_usable() && (!in_atomic() ||
 				 !cryptd_aead_queued(cryptd_tfm)))
@@ -945,7 +991,41 @@ static int rfc4106_encrypt(struct aead_request *req)
 	return crypto_aead_encrypt(req);
 }
 
+static int generic_gcmaes_encrypt(struct aead_request *req)
+{
+	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
+	struct cryptd_aead **ctx = crypto_aead_ctx(tfm);
+	struct cryptd_aead *cryptd_tfm = *ctx;
+
+	printk("generic_gcmaes encrypt\n");
+
+	tfm = &cryptd_tfm->base;
+	if (irq_fpu_usable() && (!in_atomic() ||
+				 !cryptd_aead_queued(cryptd_tfm)))
+		tfm = cryptd_aead_child(cryptd_tfm);
+
+	aead_request_set_tfm(req, tfm);
+
+	return crypto_aead_encrypt(req);
+}
+
+
 static int rfc4106_decrypt(struct aead_request *req)
+{
+	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
+	struct cryptd_aead **ctx = crypto_aead_ctx(tfm);
+	struct cryptd_aead *cryptd_tfm = *ctx;
+
+	tfm = &cryptd_tfm->base;
+	if (irq_fpu_usable() && (!in_atomic() ||
+				 !cryptd_aead_queued(cryptd_tfm)))
+		tfm = cryptd_aead_child(cryptd_tfm);
+
+	aead_request_set_tfm(req, tfm);
+
+	return crypto_aead_decrypt(req);
+}
+static int generic_gcmaes_decrypt(struct aead_request *req)
 {
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
 	struct cryptd_aead **ctx = crypto_aead_ctx(tfm);
@@ -1088,7 +1168,7 @@ static struct {
 };
 
 #ifdef CONFIG_X86_64
-static int generic_gcmaes_set_key(struct crypto_aead *aead, const u8 *key,
+static int helper_generic_gcmaes_set_key(struct crypto_aead *aead, const u8 *key,
 				  unsigned int key_len)
 {
 	struct generic_gcmaes_ctx *ctx = generic_gcmaes_ctx_get(aead);
@@ -1098,13 +1178,14 @@ static int generic_gcmaes_set_key(struct crypto_aead *aead, const u8 *key,
 	       rfc4106_set_hash_subkey(ctx->hash_subkey, key, key_len);
 }
 
-static int generic_gcmaes_encrypt(struct aead_request *req)
+static int helper_generic_gcmaes_encrypt(struct aead_request *req)
 {
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
 	struct generic_gcmaes_ctx *ctx = generic_gcmaes_ctx_get(tfm);
 	void *aes_ctx = &(ctx->aes_key_expanded);
 	u8 iv[16] __attribute__ ((__aligned__(AESNI_ALIGN)));
 	__be32 counter = cpu_to_be32(1);
+	printk("helper_generic_gcmaes_encrypt\n");
 
 	memcpy(iv, req->iv, 12);
 	*((__be32 *)(iv+12)) = counter;
@@ -1113,7 +1194,7 @@ static int generic_gcmaes_encrypt(struct aead_request *req)
 			      aes_ctx);
 }
 
-static int generic_gcmaes_decrypt(struct aead_request *req)
+static int helper_generic_gcmaes_decrypt(struct aead_request *req)
 {
 	__be32 counter = cpu_to_be32(1);
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
@@ -1163,6 +1244,24 @@ static struct aead_alg aesni_aead_algs[] = { {
 		.cra_module		= THIS_MODULE,
 	},
 }, {
+	.setkey			= helper_generic_gcmaes_set_key,
+	.setauthsize		= helper_generic_gcmaes_set_authsize,
+	.encrypt		= helper_generic_gcmaes_encrypt,
+	.decrypt		= helper_generic_gcmaes_decrypt,
+	.ivsize			= GCM_AES_IV_SIZE,
+	.maxauthsize		= 16,
+	.base = {
+		.cra_name		= "__generic-gcm-aes-aesni",
+		.cra_driver_name	= "__driver-generic-gcm-aes-aesni",
+		.cra_flags		= CRYPTO_ALG_INTERNAL,
+		.cra_blocksize		= 1,
+		.cra_ctxsize		= sizeof(struct generic_gcmaes_ctx),
+		.cra_alignmask		= AESNI_ALIGN - 1,
+		.cra_module		= THIS_MODULE,
+	},
+}, {
+	.init			= generic_gcmaes_init,
+	.exit			= generic_gcmaes_exit,
 	.setkey			= generic_gcmaes_set_key,
 	.setauthsize		= generic_gcmaes_set_authsize,
 	.encrypt		= generic_gcmaes_encrypt,
@@ -1175,8 +1274,7 @@ static struct aead_alg aesni_aead_algs[] = { {
 		.cra_priority		= 400,
 		.cra_flags		= CRYPTO_ALG_ASYNC,
 		.cra_blocksize		= 1,
-		.cra_ctxsize		= sizeof(struct generic_gcmaes_ctx),
-		.cra_alignmask		= AESNI_ALIGN - 1,
+		.cra_ctxsize		= sizeof(struct cryptd_aead *),
 		.cra_module		= THIS_MODULE,
 	},
 } };
@@ -1211,6 +1309,7 @@ static int __init aesni_init(void)
 	const char *algname;
 	const char *drvname;
 	int err;
+
 	int i;
 
 	if (!x86_match_cpu(aesni_cpu_id))
