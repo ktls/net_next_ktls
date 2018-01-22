@@ -1000,7 +1000,7 @@ static int generic_gcmaes_encrypt(struct aead_request *req)
 	printk("generic_gcmaes encrypt\n");
 
 	tfm = &cryptd_tfm->base;
-	if (irq_fpu_usable() && (!in_atomic() ||
+	if (false && irq_fpu_usable() && (!in_atomic() ||
 				 !cryptd_aead_queued(cryptd_tfm)))
 		tfm = cryptd_aead_child(cryptd_tfm);
 

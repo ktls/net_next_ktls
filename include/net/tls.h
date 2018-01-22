@@ -68,6 +68,7 @@ struct tls_sw_context {
 	struct sk_buff *recv_pkt;
 	u8 control;
 	bool decrypted;
+	bool async_decrypt;
 
 	/* Sending context */
 	char aad_space[TLS_AAD_SPACE_SIZE];
@@ -84,6 +85,11 @@ struct tls_sw_context {
 	struct scatterlist sg_aead_in[2];
 	/* AAD | sg_encrypted_data (data contain overhead for hdr&iv&tag) */
 	struct scatterlist sg_aead_out[2];
+
+	bool async_encrypt;
+	int flags;
+	unsigned char record_type;
+	struct completion encrypt_wait;
 };
 
 enum {
