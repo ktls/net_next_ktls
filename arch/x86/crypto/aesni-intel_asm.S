@@ -244,6 +244,136 @@ aad_shift_arr:
 	mov	%r13, %r12
 .endm
 
+.macro GCM_ENC_DEC1 ENC_DEC encrypt encrypted enc encr
+	and $(3<<4), %r12
+	jz _initial_num_blocks_is_0_\encrypt
+	cmp $(2<<4), %r12
+	jb _initial_num_blocks_is_1_\encrypt
+	je _initial_num_blocks_is_2_\encrypt
+_initial_num_blocks_is_3_\encrypt:
+	INITIAL_BLOCKS_ENC_DEC 3\ENC_DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 5, 678, \enc, \encr
+	sub	$48, %r13
+	jmp	_initial_blocks_\encrypted
+_initial_num_blocks_is_2_\encrypt:
+	INITIAL_BLOCKS_ENC_DEC	2\ENC_DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 6, 78, \enc, \encr
+	sub	$32, %r13
+	jmp	_initial_blocks_\encrypted
+_initial_num_blocks_is_1_\encrypt:
+	INITIAL_BLOCKS_ENC_DEC	1\ENC_DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 7, 8, \enc, \encr
+	sub	$16, %r13
+	jmp	_initial_blocks_\encrypted
+_initial_num_blocks_is_0_\encrypt:
+	INITIAL_BLOCKS_ENC_DEC	0\ENC_DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 8, 0, \enc, \encr
+_initial_blocks_\encrypted:
+
+        # Main loop - Crypt remaining blocks
+
+	cmp	$0, %r13
+	je	_zero_cipher_left_\encrypt
+	sub	$64, %r13
+	je	_four_cipher_left_\encrypt
+
+_crypt_by_4_\encrypt:
+	GHASH_4_ENCRYPT_4_PARALLEL_\ENC_DEC	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, \
+%xmm14, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, \enc
+	add	$64, %r11
+	sub	$64, %r13
+	jne	_crypt_by_4_\encrypt
+_four_cipher_left_\encrypt:
+	GHASH_LAST_4	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, %xmm14, \
+%xmm15, %xmm1, %xmm2, %xmm3, %xmm4, %xmm8
+_zero_cipher_left_\encrypt:
+	mov	%arg4, %r13
+	and	$15, %r13				# %r13 = arg4 (mod 16)
+	je	_multiple_of_16_bytes_\encrypt
+
+        # Handle the last <16 byte block separately
+
+	paddd ONE(%rip), %xmm0         # increment CNT to get Yn
+        movdqa SHUF_MASK(%rip), %xmm10
+	PSHUFB_XMM %xmm10, %xmm0
+
+	ENCRYPT_SINGLE_BLOCK  %xmm0, %xmm1    # E(K, Yn)
+	sub $16, %r11
+	add %r13, %r11
+	movdqu (%arg3,%r11,1), %xmm1   # receive the last <16 byte block
+	lea SHIFT_MASK+16(%rip), %r12
+	sub %r13, %r12
+        # adjust the shuffle mask pointer to be able to shift 16-%r13 bytes
+        # (%r13 is the number of bytes in plaintext mod 16)
+	movdqu (%r12), %xmm2           # get the appropriate shuffle mask
+	PSHUFB_XMM %xmm2, %xmm1            # right shift 16-%r13 butes
+
+.if \encr == 0
+	movdqa  %xmm1, %xmm2
+.endif
+	pxor %xmm1, %xmm0            # Ciphertext XOR E(K, Yn)
+	movdqu ALL_F-SHIFT_MASK(%r12), %xmm1
+	# get the appropriate mask to mask out top 16-%r13 bytes of %xmm0
+	pand %xmm1, %xmm0            # mask out top 16-%r13 bytes of %xmm0
+.if \encr == 0
+	pand    %xmm1, %xmm2
+        movdqa SHUF_MASK(%rip), %xmm10
+	PSHUFB_XMM %xmm10 ,%xmm2
+
+	pxor %xmm2, %xmm8
+.else
+        movdqa SHUF_MASK(%rip), %xmm10
+        PSHUFB_XMM %xmm10,%xmm0
+
+        pxor    %xmm0, %xmm8
+.endif
+	GHASH_MUL %xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
+	          # GHASH computation for the last <16 byte block
+	sub %r13, %r11
+	add $16, %r11
+
+.if \encr == 1
+       movdqa SHUF_MASK(%rip), %xmm10
+       PSHUFB_XMM %xmm10, %xmm0
+.endif
+        # shuffle xmm0 back to output as ciphertext
+
+        # output %r13 bytes
+	MOVQ_R64_XMM	%xmm0, %rax
+	cmp	$8, %r13
+	jle	_less_than_8_bytes_left_\encrypt
+	mov	%rax, (%arg2 , %r11, 1)
+	add	$8, %r11
+	psrldq	$8, %xmm0
+	MOVQ_R64_XMM	%xmm0, %rax
+	sub	$8, %r13
+_less_than_8_bytes_left_\encrypt:
+	mov	%al,  (%arg2, %r11, 1)
+	add	$1, %r11
+	shr	$8, %rax
+	sub	$1, %r13
+	jne	_less_than_8_bytes_left_\encrypt
+_multiple_of_16_bytes_\encrypt:
+	mov	arg8, %r12		  # %r13 = aadLen (number of bytes)
+	shl	$3, %r12		  # convert into number of bits
+	movd	%r12d, %xmm15		  # len(A) in %xmm15
+	shl	$3, %arg4		  # len(C) in bits (*128)
+	MOVQ_R64_XMM	%arg4, %xmm1
+	pslldq	$8, %xmm15		  # %xmm15 = len(A)||0x0000000000000000
+	pxor	%xmm1, %xmm15		  # %xmm15 = len(A)||len(C)
+	pxor	%xmm15, %xmm8
+	GHASH_MUL	%xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
+	         # final GHASH computation
+        movdqa SHUF_MASK(%rip), %xmm10
+	PSHUFB_XMM %xmm10, %xmm8
+
+	mov	%arg5, %rax		  # %rax = *Y0
+	movdqu	(%rax), %xmm0		  # %xmm0 = Y0
+	ENCRYPT_SINGLE_BLOCK	%xmm0,  %xmm1	  # E(K, Y0)
+	pxor	%xmm8, %xmm0
+_return_T_\encrypt:
+.endm
+
 .macro GCM_FINISH ENC_DEC
 	mov	arg9, %r10                     # %r10 = authTag
 	mov	arg10, %r11                    # %r11 = auth_tag_len
@@ -1259,114 +1389,7 @@ ENTRY(aesni_gcm_dec)
 	mov %arg4, %r13    # save the number of bytes of plaintext/ciphertext
 	and $-16, %r13                      # %r13 = %r13 - (%r13 mod 16)
 	mov %r13, %r12
-	and $(3<<4), %r12
-	jz _initial_num_blocks_is_0_decrypt
-	cmp $(2<<4), %r12
-	jb _initial_num_blocks_is_1_decrypt
-	je _initial_num_blocks_is_2_decrypt
-_initial_num_blocks_is_3_decrypt:
-	INITIAL_BLOCKS_ENC_DEC 3DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 5, 678, dec, 0
-	sub	$48, %r13
-	jmp	_initial_blocks_decrypted
-_initial_num_blocks_is_2_decrypt:
-	INITIAL_BLOCKS_ENC_DEC	2DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 6, 78, dec, 0
-	sub	$32, %r13
-	jmp	_initial_blocks_decrypted
-_initial_num_blocks_is_1_decrypt:
-	INITIAL_BLOCKS_ENC_DEC	1DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 7, 8, dec, 0
-	sub	$16, %r13
-	jmp	_initial_blocks_decrypted
-_initial_num_blocks_is_0_decrypt:
-	INITIAL_BLOCKS_ENC_DEC	0DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 8, 0, dec, 0
-_initial_blocks_decrypted:
-	cmp	$0, %r13
-	je	_zero_cipher_left_decrypt
-	sub	$64, %r13
-	je	_four_cipher_left_decrypt
-_decrypt_by_4:
-	GHASH_4_ENCRYPT_4_PARALLEL_DEC	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, \
-%xmm14, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, dec
-	add	$64, %r11
-	sub	$64, %r13
-	jne	_decrypt_by_4
-_four_cipher_left_decrypt:
-	GHASH_LAST_4	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, %xmm14, \
-%xmm15, %xmm1, %xmm2, %xmm3, %xmm4, %xmm8
-_zero_cipher_left_decrypt:
-	mov	%arg4, %r13
-	and	$15, %r13				# %r13 = arg4 (mod 16)
-	je	_multiple_of_16_bytes_decrypt
-
-        # Handle the last <16 byte block separately
-
-	paddd ONE(%rip), %xmm0         # increment CNT to get Yn
-        movdqa SHUF_MASK(%rip), %xmm10
-	PSHUFB_XMM %xmm10, %xmm0
-
-	ENCRYPT_SINGLE_BLOCK  %xmm0, %xmm1    # E(K, Yn)
-	sub $16, %r11
-	add %r13, %r11
-	movdqu (%arg3,%r11,1), %xmm1   # receive the last <16 byte block
-	lea SHIFT_MASK+16(%rip), %r12
-	sub %r13, %r12
-# adjust the shuffle mask pointer to be able to shift 16-%r13 bytes
-# (%r13 is the number of bytes in plaintext mod 16)
-	movdqu (%r12), %xmm2           # get the appropriate shuffle mask
-	PSHUFB_XMM %xmm2, %xmm1            # right shift 16-%r13 butes
-
-	movdqa  %xmm1, %xmm2
-	pxor %xmm1, %xmm0            # Ciphertext XOR E(K, Yn)
-	movdqu ALL_F-SHIFT_MASK(%r12), %xmm1
-	# get the appropriate mask to mask out top 16-%r13 bytes of %xmm0
-	pand %xmm1, %xmm0            # mask out top 16-%r13 bytes of %xmm0
-	pand    %xmm1, %xmm2
-        movdqa SHUF_MASK(%rip), %xmm10
-	PSHUFB_XMM %xmm10 ,%xmm2
-
-	pxor %xmm2, %xmm8
-	GHASH_MUL %xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
-	          # GHASH computation for the last <16 byte block
-	sub %r13, %r11
-	add $16, %r11
-
-        # output %r13 bytes
-	MOVQ_R64_XMM	%xmm0, %rax
-	cmp	$8, %r13
-	jle	_less_than_8_bytes_left_decrypt
-	mov	%rax, (%arg2 , %r11, 1)
-	add	$8, %r11
-	psrldq	$8, %xmm0
-	MOVQ_R64_XMM	%xmm0, %rax
-	sub	$8, %r13
-_less_than_8_bytes_left_decrypt:
-	mov	%al,  (%arg2, %r11, 1)
-	add	$1, %r11
-	shr	$8, %rax
-	sub	$1, %r13
-	jne	_less_than_8_bytes_left_decrypt
-_multiple_of_16_bytes_decrypt:
-	mov	arg8, %r12		  # %r13 = aadLen (number of bytes)
-	shl	$3, %r12		  # convert into number of bits
-	movd	%r12d, %xmm15		  # len(A) in %xmm15
-	shl	$3, %arg4		  # len(C) in bits (*128)
-	MOVQ_R64_XMM	%arg4, %xmm1
-	pslldq	$8, %xmm15		  # %xmm15 = len(A)||0x0000000000000000
-	pxor	%xmm1, %xmm15		  # %xmm15 = len(A)||len(C)
-	pxor	%xmm15, %xmm8
-	GHASH_MUL	%xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
-	         # final GHASH computation
-        movdqa SHUF_MASK(%rip), %xmm10
-	PSHUFB_XMM %xmm10, %xmm8
-
-	mov	%arg5, %rax		  # %rax = *Y0
-	movdqu	(%rax), %xmm0		  # %xmm0 = Y0
-	ENCRYPT_SINGLE_BLOCK	%xmm0,  %xmm1	  # E(K, Y0)
-	pxor	%xmm8, %xmm0
-_return_T_decrypt:
+        GCM_ENC_DEC1 DEC decrypt decrypted dec 0
         GCM_FINISH DEC
 	FUNC_RESTORE
 	ret
@@ -1462,119 +1485,7 @@ ENTRY(aesni_gcm_enc)
 	GCM_INIT
         # Encrypt first few blocks
 
-	and	$(3<<4), %r12
-	jz	_initial_num_blocks_is_0_encrypt
-	cmp	$(2<<4), %r12
-	jb	_initial_num_blocks_is_1_encrypt
-	je	_initial_num_blocks_is_2_encrypt
-_initial_num_blocks_is_3_encrypt:
-	INITIAL_BLOCKS_ENC_DEC	3ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 5, 678, enc, 1
-	sub	$48, %r13
-	jmp	_initial_blocks_encrypted
-_initial_num_blocks_is_2_encrypt:
-	INITIAL_BLOCKS_ENC_DEC	2ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 6, 78, enc, 1
-	sub	$32, %r13
-	jmp	_initial_blocks_encrypted
-_initial_num_blocks_is_1_encrypt:
-	INITIAL_BLOCKS_ENC_DEC	1ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 7, 8, enc, 1
-	sub	$16, %r13
-	jmp	_initial_blocks_encrypted
-_initial_num_blocks_is_0_encrypt:
-	INITIAL_BLOCKS_ENC_DEC	0ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 8, 0, enc, 1
-_initial_blocks_encrypted:
-
-        # Main loop - Encrypt remaining blocks
-
-	cmp	$0, %r13
-	je	_zero_cipher_left_encrypt
-	sub	$64, %r13
-	je	_four_cipher_left_encrypt
-_encrypt_by_4_encrypt:
-	GHASH_4_ENCRYPT_4_PARALLEL_ENC	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, \
-%xmm14, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, enc
-	add	$64, %r11
-	sub	$64, %r13
-	jne	_encrypt_by_4_encrypt
-_four_cipher_left_encrypt:
-	GHASH_LAST_4	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, %xmm14, \
-%xmm15, %xmm1, %xmm2, %xmm3, %xmm4, %xmm8
-_zero_cipher_left_encrypt:
-	mov	%arg4, %r13
-	and	$15, %r13			# %r13 = arg4 (mod 16)
-	je	_multiple_of_16_bytes_encrypt
-
-         # Handle the last <16 Byte block separately
-	paddd ONE(%rip), %xmm0                # INCR CNT to get Yn
-        movdqa SHUF_MASK(%rip), %xmm10
-	PSHUFB_XMM %xmm10, %xmm0
-
-
-	ENCRYPT_SINGLE_BLOCK	%xmm0, %xmm1        # Encrypt(K, Yn)
-	sub $16, %r11
-	add %r13, %r11
-	movdqu (%arg3,%r11,1), %xmm1     # receive the last <16 byte blocks
-	lea SHIFT_MASK+16(%rip), %r12
-	sub %r13, %r12
-	# adjust the shuffle mask pointer to be able to shift 16-r13 bytes
-	# (%r13 is the number of bytes in plaintext mod 16)
-	movdqu	(%r12), %xmm2           # get the appropriate shuffle mask
-	PSHUFB_XMM	%xmm2, %xmm1            # shift right 16-r13 byte
-	pxor	%xmm1, %xmm0            # Plaintext XOR Encrypt(K, Yn)
-	movdqu	ALL_F-SHIFT_MASK(%r12), %xmm1
-	# get the appropriate mask to mask out top 16-r13 bytes of xmm0
-	pand	%xmm1, %xmm0            # mask out top 16-r13 bytes of xmm0
-        movdqa SHUF_MASK(%rip), %xmm10
-	PSHUFB_XMM %xmm10,%xmm0
-
-	pxor	%xmm0, %xmm8
-	GHASH_MUL %xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
-	# GHASH computation for the last <16 byte block
-	sub	%r13, %r11
-	add	$16, %r11
-
-	movdqa SHUF_MASK(%rip), %xmm10
-	PSHUFB_XMM %xmm10, %xmm0
-
-	# shuffle xmm0 back to output as ciphertext
-
-        # Output %r13 bytes
-	MOVQ_R64_XMM %xmm0, %rax
-	cmp $8, %r13
-	jle _less_than_8_bytes_left_encrypt
-	mov %rax, (%arg2 , %r11, 1)
-	add $8, %r11
-	psrldq $8, %xmm0
-	MOVQ_R64_XMM %xmm0, %rax
-	sub $8, %r13
-_less_than_8_bytes_left_encrypt:
-	mov %al,  (%arg2, %r11, 1)
-	add $1, %r11
-	shr $8, %rax
-	sub $1, %r13
-	jne _less_than_8_bytes_left_encrypt
-_multiple_of_16_bytes_encrypt:
-	mov	arg8, %r12    # %r12 = addLen (number of bytes)
-	shl	$3, %r12
-	movd	%r12d, %xmm15       # len(A) in %xmm15
-	shl	$3, %arg4               # len(C) in bits (*128)
-	MOVQ_R64_XMM	%arg4, %xmm1
-	pslldq	$8, %xmm15          # %xmm15 = len(A)||0x0000000000000000
-	pxor	%xmm1, %xmm15       # %xmm15 = len(A)||len(C)
-	pxor	%xmm15, %xmm8
-	GHASH_MUL	%xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
-	# final GHASH computation
-        movdqa SHUF_MASK(%rip), %xmm10
-	PSHUFB_XMM %xmm10, %xmm8         # perform a 16 byte swap
-
-	mov	%arg5, %rax		       # %rax  = *Y0
-	movdqu	(%rax), %xmm0		       # %xmm0 = Y0
-	ENCRYPT_SINGLE_BLOCK	%xmm0, %xmm15         # Encrypt(K, Y0)
-	pxor	%xmm8, %xmm0
-_return_T_encrypt:
+        GCM_ENC_DEC1 ENC encrypt encrypted enc 1
         GCM_FINISH ENC
 	FUNC_RESTORE
 	ret
