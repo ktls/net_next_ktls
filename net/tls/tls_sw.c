@@ -1192,7 +1192,7 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 	}
 
 	if (!*aead) {
-		*aead = crypto_alloc_aead("gcm(aes)", 0, 0);
+		*aead = crypto_alloc_aead("gcm(aes)", 0, CRYPTO_ALG_ASYNC);
 		if (IS_ERR(*aead)) {
 			rc = PTR_ERR(*aead);
 			*aead = NULL;
