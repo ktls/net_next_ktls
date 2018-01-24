@@ -269,8 +269,8 @@ aad_shift_arr:
 */
 
 
-.macro INITIAL_BLOCKS_DEC num_initial_blocks TMP1 TMP2 TMP3 TMP4 TMP5 XMM0 XMM1 \
-XMM2 XMM3 XMM4 XMMDst TMP6 TMP7 i i_seq operation
+.macro INITIAL_BLOCKS_ENC_DEC num_initial_blocks TMP1 TMP2 TMP3 TMP4 TMP5 XMM0 XMM1 \
+XMM2 XMM3 XMM4 XMMDst TMP6 TMP7 i i_seq operation enc
         MOVADQ     SHUF_MASK(%rip), %xmm14
 	mov	   arg7, %r10           # %r10 = AAD
 	mov	   arg8, %r12           # %r12 = aadLen
@@ -346,7 +346,11 @@ _get_AAD_done\num_initial_blocks\operation:
 	MOVADQ		(%arg1),\TMP2
 .irpc index, \i_seq
 	paddd	   \TMP1, \XMM0                 # INCR Y0
+.if \enc == 0
 	movdqa	   \XMM0, %xmm\index
+.else
+	MOVADQ		\XMM0, %xmm\index
+.endif
 	PSHUFB_XMM   %xmm14, %xmm\index      # perform a 16 byte swap
 	pxor	   \TMP2, %xmm\index
 .endr
@@ -375,7 +379,9 @@ aes_loop_initial_dec\num_initial_blocks:
 	# write back plaintext/ciphertext for num_initial_blocks
 	add	   $16, %r11
 
+.if \enc == 0
 	movdqa     \TMP1, %xmm\index
+.endif
 	PSHUFB_XMM	   %xmm14, %xmm\index
                 # prepare plaintext/ciphertext for GHASH computation
 .endr
@@ -489,276 +495,33 @@ aes_loop_pre_dec_done\num_initial_blocks:
 	AESENCLAST \TMP2, \XMM4
 	movdqu	   16*0(%arg3 , %r11 , 1), \TMP1
 	pxor	   \TMP1, \XMM1
+.if \enc == 0
 	movdqu	   \XMM1, 16*0(%arg2 , %r11 , 1)
 	movdqa     \TMP1, \XMM1
+.endif
 	movdqu	   16*1(%arg3 , %r11 , 1), \TMP1
 	pxor	   \TMP1, \XMM2
+.if \enc == 0
 	movdqu	   \XMM2, 16*1(%arg2 , %r11 , 1)
 	movdqa     \TMP1, \XMM2
+.endif
 	movdqu	   16*2(%arg3 , %r11 , 1), \TMP1
 	pxor	   \TMP1, \XMM3
+.if \enc == 0
 	movdqu	   \XMM3, 16*2(%arg2 , %r11 , 1)
 	movdqa     \TMP1, \XMM3
+.endif
 	movdqu	   16*3(%arg3 , %r11 , 1), \TMP1
 	pxor	   \TMP1, \XMM4
+.if \enc == 0
 	movdqu	   \XMM4, 16*3(%arg2 , %r11 , 1)
 	movdqa     \TMP1, \XMM4
-	add	   $64, %r11
-	PSHUFB_XMM %xmm14, \XMM1 # perform a 16 byte swap
-	pxor	   \XMMDst, \XMM1
-# combine GHASHed value with the corresponding ciphertext
-	PSHUFB_XMM %xmm14, \XMM2 # perform a 16 byte swap
-	PSHUFB_XMM %xmm14, \XMM3 # perform a 16 byte swap
-	PSHUFB_XMM %xmm14, \XMM4 # perform a 16 byte swap
-
-_initial_blocks_done\num_initial_blocks\operation:
-
-.endm
-
-
-/*
-* if a = number of total plaintext bytes
-* b = floor(a/16)
-* num_initial_blocks = b mod 4
-* encrypt the initial num_initial_blocks blocks and apply ghash on
-* the ciphertext
-* %r10, %r11, %r12, %rax, %xmm5, %xmm6, %xmm7, %xmm8, %xmm9 registers
-* are clobbered
-* arg1, %arg2, %arg3, %r14 are used as a pointer only, not modified
-*/
-
-
-.macro INITIAL_BLOCKS_ENC num_initial_blocks TMP1 TMP2 TMP3 TMP4 TMP5 XMM0 XMM1 \
-XMM2 XMM3 XMM4 XMMDst TMP6 TMP7 i i_seq operation
-        MOVADQ     SHUF_MASK(%rip), %xmm14
-	mov	   arg7, %r10           # %r10 = AAD
-	mov	   arg8, %r12           # %r12 = aadLen
-	mov	   %r12, %r11
-	pxor	   %xmm\i, %xmm\i
-	pxor	   \XMM2, \XMM2
-
-	cmp	   $16, %r11
-	jl	   _get_AAD_rest8\num_initial_blocks\operation
-_get_AAD_blocks\num_initial_blocks\operation:
-	movdqu	   (%r10), %xmm\i
-	PSHUFB_XMM   %xmm14, %xmm\i # byte-reflect the AAD data
-	pxor	   %xmm\i, \XMM2
-	GHASH_MUL  \XMM2, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-	add	   $16, %r10
-	sub	   $16, %r12
-	sub	   $16, %r11
-	cmp	   $16, %r11
-	jge	   _get_AAD_blocks\num_initial_blocks\operation
-
-	movdqu	   \XMM2, %xmm\i
-	cmp	   $0, %r11
-	je	   _get_AAD_done\num_initial_blocks\operation
-
-	pxor	   %xmm\i,%xmm\i
-
-	/* read the last <16B of AAD. since we have at least 4B of
-	data right after the AAD (the ICV, and maybe some PT), we can
-	read 4B/8B blocks safely, and then get rid of the extra stuff */
-_get_AAD_rest8\num_initial_blocks\operation:
-	cmp	   $4, %r11
-	jle	   _get_AAD_rest4\num_initial_blocks\operation
-	movq	   (%r10), \TMP1
-	add	   $8, %r10
-	sub	   $8, %r11
-	pslldq	   $8, \TMP1
-	psrldq	   $8, %xmm\i
-	pxor	   \TMP1, %xmm\i
-	jmp	   _get_AAD_rest8\num_initial_blocks\operation
-_get_AAD_rest4\num_initial_blocks\operation:
-	cmp	   $0, %r11
-	jle	   _get_AAD_rest0\num_initial_blocks\operation
-	mov	   (%r10), %eax
-	movq	   %rax, \TMP1
-	add	   $4, %r10
-	sub	   $4, %r10
-	pslldq	   $12, \TMP1
-	psrldq	   $4, %xmm\i
-	pxor	   \TMP1, %xmm\i
-_get_AAD_rest0\num_initial_blocks\operation:
-	/* finalize: shift out the extra bytes we read, and align
-	left. since pslldq can only shift by an immediate, we use
-	vpshufb and an array of shuffle masks */
-	movq	   %r12, %r11
-	salq	   $4, %r11
-	movdqu	   aad_shift_arr(%r11), \TMP1
-	PSHUFB_XMM \TMP1, %xmm\i
-_get_AAD_rest_final\num_initial_blocks\operation:
-	PSHUFB_XMM   %xmm14, %xmm\i # byte-reflect the AAD data
-	pxor	   \XMM2, %xmm\i
-	GHASH_MUL  %xmm\i, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-
-_get_AAD_done\num_initial_blocks\operation:
-	xor	   %r11, %r11 # initialise the data pointer offset as zero
-	# start AES for num_initial_blocks blocks
-
-	mov	   %arg5, %rax                      # %rax = *Y0
-	movdqu	   (%rax), \XMM0                    # XMM0 = Y0
-	PSHUFB_XMM   %xmm14, \XMM0
-
-.if (\i == 5) || (\i == 6) || (\i == 7)
-
-	MOVADQ		ONE(%RIP),\TMP1
-	MOVADQ		0(%arg1),\TMP2
-.irpc index, \i_seq
-	paddd		\TMP1, \XMM0                 # INCR Y0
-	MOVADQ		\XMM0, %xmm\index
-	PSHUFB_XMM	%xmm14, %xmm\index      # perform a 16 byte swap
-	pxor		\TMP2, %xmm\index
-.endr
-	lea	0x10(%arg1),%r10
-	mov	keysize,%eax
-	shr	$2,%eax				# 128->4, 192->6, 256->8
-	add	$5,%eax			      # 128->9, 192->11, 256->13
-
-aes_loop_initial_enc\num_initial_blocks:
-	MOVADQ	(%r10),\TMP1
-.irpc	index, \i_seq
-	AESENC	\TMP1, %xmm\index
-.endr
-	add	$16,%r10
-	sub	$1,%eax
-	jnz	aes_loop_initial_enc\num_initial_blocks
-
-	MOVADQ	(%r10), \TMP1
-.irpc index, \i_seq
-	AESENCLAST \TMP1, %xmm\index         # Last Round
-.endr
-.irpc index, \i_seq
-	movdqu	   (%arg3 , %r11, 1), \TMP1
-	pxor	   \TMP1, %xmm\index
-	movdqu	   %xmm\index, (%arg2 , %r11, 1)
-	# write back plaintext/ciphertext for num_initial_blocks
-	add	   $16, %r11
-	PSHUFB_XMM	   %xmm14, %xmm\index
-
-		# prepare plaintext/ciphertext for GHASH computation
-.endr
-.endif
-
-        # apply GHASH on num_initial_blocks blocks
-
-.if \i == 5
-        pxor       %xmm5, %xmm6
-	GHASH_MUL  %xmm6, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-        pxor       %xmm6, %xmm7
-	GHASH_MUL  %xmm7, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-        pxor       %xmm7, %xmm8
-	GHASH_MUL  %xmm8, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-.elseif \i == 6
-        pxor       %xmm6, %xmm7
-	GHASH_MUL  %xmm7, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-        pxor       %xmm7, %xmm8
-	GHASH_MUL  %xmm8, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-.elseif \i == 7
-        pxor       %xmm7, %xmm8
-	GHASH_MUL  %xmm8, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
-.endif
-	cmp	   $64, %r13
-	jl	_initial_blocks_done\num_initial_blocks\operation
-	# no need for precomputed values
-/*
-*
-* Precomputations for HashKey parallel with encryption of first 4 blocks.
-* Haskey_i_k holds XORed values of the low and high parts of the Haskey_i
-*/
-	MOVADQ	   ONE(%RIP),\TMP1
-	paddd	   \TMP1, \XMM0              # INCR Y0
-	MOVADQ	   \XMM0, \XMM1
-	PSHUFB_XMM  %xmm14, \XMM1        # perform a 16 byte swap
-
-	paddd	   \TMP1, \XMM0              # INCR Y0
-	MOVADQ	   \XMM0, \XMM2
-	PSHUFB_XMM  %xmm14, \XMM2        # perform a 16 byte swap
-
-	paddd	   \TMP1, \XMM0              # INCR Y0
-	MOVADQ	   \XMM0, \XMM3
-	PSHUFB_XMM %xmm14, \XMM3        # perform a 16 byte swap
-
-	paddd	   \TMP1, \XMM0              # INCR Y0
-	MOVADQ	   \XMM0, \XMM4
-	PSHUFB_XMM %xmm14, \XMM4        # perform a 16 byte swap
-
-	MOVADQ	   0(%arg1),\TMP1
-	pxor	   \TMP1, \XMM1
-	pxor	   \TMP1, \XMM2
-	pxor	   \TMP1, \XMM3
-	pxor	   \TMP1, \XMM4
-	movdqa	   \TMP3, \TMP5
-	pshufd	   $78, \TMP3, \TMP1
-	pxor	   \TMP3, \TMP1
-	movdqa	   \TMP1, HashKey_k(%rsp)
-	GHASH_MUL  \TMP5, \TMP3, \TMP1, \TMP2, \TMP4, \TMP6, \TMP7
-# TMP5 = HashKey^2<<1 (mod poly)
-	movdqa	   \TMP5, HashKey_2(%rsp)
-# HashKey_2 = HashKey^2<<1 (mod poly)
-	pshufd	   $78, \TMP5, \TMP1
-	pxor	   \TMP5, \TMP1
-	movdqa	   \TMP1, HashKey_2_k(%rsp)
-.irpc index, 1234 # do 4 rounds
-	movaps 0x10*\index(%arg1), \TMP1
-	AESENC	   \TMP1, \XMM1
-	AESENC	   \TMP1, \XMM2
-	AESENC	   \TMP1, \XMM3
-	AESENC	   \TMP1, \XMM4
-.endr
-	GHASH_MUL  \TMP5, \TMP3, \TMP1, \TMP2, \TMP4, \TMP6, \TMP7
-# TMP5 = HashKey^3<<1 (mod poly)
-	movdqa	   \TMP5, HashKey_3(%rsp)
-	pshufd	   $78, \TMP5, \TMP1
-	pxor	   \TMP5, \TMP1
-	movdqa	   \TMP1, HashKey_3_k(%rsp)
-.irpc index, 56789 # do next 5 rounds
-	movaps 0x10*\index(%arg1), \TMP1
-	AESENC	   \TMP1, \XMM1
-	AESENC	   \TMP1, \XMM2
-	AESENC	   \TMP1, \XMM3
-	AESENC	   \TMP1, \XMM4
-.endr
-	GHASH_MUL  \TMP5, \TMP3, \TMP1, \TMP2, \TMP4, \TMP6, \TMP7
-# TMP5 = HashKey^3<<1 (mod poly)
-	movdqa	   \TMP5, HashKey_4(%rsp)
-	pshufd	   $78, \TMP5, \TMP1
-	pxor	   \TMP5, \TMP1
-	movdqa	   \TMP1, HashKey_4_k(%rsp)
-	lea	   0xa0(%arg1),%r10
-	mov	   keysize,%eax
-	shr	   $2,%eax			# 128->4, 192->6, 256->8
-	sub	   $4,%eax			# 128->0, 192->2, 256->4
-	jz	   aes_loop_pre_enc_done\num_initial_blocks
-
-aes_loop_pre_enc\num_initial_blocks:
-	MOVADQ	   (%r10),\TMP2
-.irpc	index, 1234
-	AESENC	   \TMP2, %xmm\index
-.endr
-	add	   $16,%r10
-	sub	   $1,%eax
-	jnz	   aes_loop_pre_enc\num_initial_blocks
-
-aes_loop_pre_enc_done\num_initial_blocks:
-	MOVADQ	   (%r10), \TMP2
-	AESENCLAST \TMP2, \XMM1
-	AESENCLAST \TMP2, \XMM2
-	AESENCLAST \TMP2, \XMM3
-	AESENCLAST \TMP2, \XMM4
-	movdqu	   16*0(%arg3 , %r11 , 1), \TMP1
-	pxor	   \TMP1, \XMM1
-	movdqu	   16*1(%arg3 , %r11 , 1), \TMP1
-	pxor	   \TMP1, \XMM2
-	movdqu	   16*2(%arg3 , %r11 , 1), \TMP1
-	pxor	   \TMP1, \XMM3
-	movdqu	   16*3(%arg3 , %r11 , 1), \TMP1
-	pxor	   \TMP1, \XMM4
+.else
 	movdqu     \XMM1, 16*0(%arg2 , %r11 , 1)
 	movdqu     \XMM2, 16*1(%arg2 , %r11 , 1)
 	movdqu     \XMM3, 16*2(%arg2 , %r11 , 1)
 	movdqu     \XMM4, 16*3(%arg2 , %r11 , 1)
-
+.endif
 	add	   $64, %r11
 	PSHUFB_XMM %xmm14, \XMM1 # perform a 16 byte swap
 	pxor	   \XMMDst, \XMM1
@@ -1444,23 +1207,23 @@ ENTRY(aesni_gcm_dec)
 	jb _initial_num_blocks_is_1_decrypt
 	je _initial_num_blocks_is_2_decrypt
 _initial_num_blocks_is_3_decrypt:
-	INITIAL_BLOCKS_DEC 3, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 5, 678, dec
+	INITIAL_BLOCKS_ENC_DEC 3DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 5, 678, dec, 0
 	sub	$48, %r13
 	jmp	_initial_blocks_decrypted
 _initial_num_blocks_is_2_decrypt:
-	INITIAL_BLOCKS_DEC	2, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 6, 78, dec
+	INITIAL_BLOCKS_ENC_DEC	2DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 6, 78, dec, 0
 	sub	$32, %r13
 	jmp	_initial_blocks_decrypted
 _initial_num_blocks_is_1_decrypt:
-	INITIAL_BLOCKS_DEC	1, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 7, 8, dec
+	INITIAL_BLOCKS_ENC_DEC	1DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 7, 8, dec, 0
 	sub	$16, %r13
 	jmp	_initial_blocks_decrypted
 _initial_num_blocks_is_0_decrypt:
-	INITIAL_BLOCKS_DEC	0, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 8, 0, dec
+	INITIAL_BLOCKS_ENC_DEC	0DEC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 8, 0, dec, 0
 _initial_blocks_decrypted:
 	cmp	$0, %r13
 	je	_zero_cipher_left_decrypt
@@ -1720,23 +1483,23 @@ ENTRY(aesni_gcm_enc)
 	jb	_initial_num_blocks_is_1_encrypt
 	je	_initial_num_blocks_is_2_encrypt
 _initial_num_blocks_is_3_encrypt:
-	INITIAL_BLOCKS_ENC	3, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 5, 678, enc
+	INITIAL_BLOCKS_ENC_DEC	3ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 5, 678, enc, 1
 	sub	$48, %r13
 	jmp	_initial_blocks_encrypted
 _initial_num_blocks_is_2_encrypt:
-	INITIAL_BLOCKS_ENC	2, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 6, 78, enc
+	INITIAL_BLOCKS_ENC_DEC	2ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 6, 78, enc, 1
 	sub	$32, %r13
 	jmp	_initial_blocks_encrypted
 _initial_num_blocks_is_1_encrypt:
-	INITIAL_BLOCKS_ENC	1, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 7, 8, enc
+	INITIAL_BLOCKS_ENC_DEC	1ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 7, 8, enc, 1
 	sub	$16, %r13
 	jmp	_initial_blocks_encrypted
 _initial_num_blocks_is_0_encrypt:
-	INITIAL_BLOCKS_ENC	0, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
-%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 8, 0, enc
+	INITIAL_BLOCKS_ENC_DEC	0ENC, %xmm9, %xmm10, %xmm13, %xmm11, %xmm12, %xmm0, \
+%xmm1, %xmm2, %xmm3, %xmm4, %xmm8, %xmm5, %xmm6, 8, 0, enc, 1
 _initial_blocks_encrypted:
 
         # Main loop - Encrypt remaining blocks
