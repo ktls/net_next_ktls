@@ -278,7 +278,7 @@ _initial_blocks_\encrypted:
 	je	_four_cipher_left_\encrypt
 
 _crypt_by_4_\encrypt:
-	GHASH_4_ENCRYPT_4_PARALLEL_\ENC_DEC	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, \
+	GHASH_4_ENCRYPT_4_PARALLEL_\enc	\ENC_DEC %xmm9, %xmm10, %xmm11, %xmm12, %xmm13, \
 %xmm14, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5, %xmm6, %xmm7, %xmm8, \enc
 	add	$64, %r11
 	sub	$64, %r13
@@ -758,7 +758,7 @@ _initial_blocks_done\num_initial_blocks\operation:
 * arg1, %arg2, %arg3 are used as pointers only, not modified
 * %r11 is the data offset value
 */
-.macro GHASH_4_ENCRYPT_4_PARALLEL_ENC TMP1 TMP2 TMP3 TMP4 TMP5 \
+.macro GHASH_4_ENCRYPT_4_PARALLEL_ENC enc TMP1 TMP2 TMP3 TMP4 TMP5 \
 TMP6 XMM0 XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 operation
 
 	movdqa	  \XMM1, \XMM5
@@ -880,18 +880,18 @@ TMP6 XMM0 XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 operation
 	mov	  keysize,%eax
 	shr	  $2,%eax			# 128->4, 192->6, 256->8
 	sub	  $4,%eax			# 128->0, 192->2, 256->4
-	jz	  aes_loop_par_enc_done
+	jz	  aes_loop_par_done_\enc
 
-aes_loop_par_enc:
+aes_loop_par_\enc:
 	MOVADQ	  (%r10),\TMP3
 .irpc	index, 1234
 	AESENC	  \TMP3, %xmm\index
 .endr
 	add	  $16,%r10
 	sub	  $1,%eax
-	jnz	  aes_loop_par_enc
+	jnz	  aes_loop_par_\enc
 
-aes_loop_par_enc_done:
+aes_loop_par_done_\enc:
 	MOVADQ	  (%r10), \TMP3
 	AESENCLAST \TMP3, \XMM1           # Round 10
 	AESENCLAST \TMP3, \XMM2
@@ -966,7 +966,7 @@ aes_loop_par_enc_done:
 * arg1, %arg2, %arg3 are used as pointers only, not modified
 * %r11 is the data offset value
 */
-.macro GHASH_4_ENCRYPT_4_PARALLEL_DEC TMP1 TMP2 TMP3 TMP4 TMP5 \
+.macro GHASH_4_ENCRYPT_4_PARALLEL_DEC dec TMP1 TMP2 TMP3 TMP4 TMP5 \
 TMP6 XMM0 XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 operation
 
 	movdqa	  \XMM1, \XMM5
@@ -1483,13 +1483,36 @@ ENTRY(aesni_gcm_enc)
 	FUNC_SAVE
 
 	GCM_INIT
-        # Encrypt first few blocks
 
         GCM_ENC_DEC1 ENC encrypt encrypted enc 1
+
         GCM_FINISH ENC
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc)
+
+ENTRY(aesni_gcm_enc2)
+	FUNC_SAVE
+
+        add $-16, %arg4
+	GCM_INIT
+
+        GCM_ENC_DEC1 ENC2 encrypt2 encrypted2 enc 1
+
+        add $48, %arg2
+        add $48, %arg3
+        mov $16, %arg4
+//	GCM_INIT
+// TODO
+	mov	%arg4, %r13            # %xmm13 holds HashKey<<1 (mod poly)
+	and	$-16, %r13
+	mov	%r13, %r12
+        GCM_ENC_DEC1 ENC3 encrypt3 encrypted3 enc 1
+
+        GCM_FINISH ENC2
+	FUNC_RESTORE
+	ret
+ENDPROC(aesni_gcm_enc2)
 
 #endif
 

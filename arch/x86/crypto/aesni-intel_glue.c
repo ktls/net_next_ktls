@@ -121,6 +121,10 @@ asmlinkage void aesni_gcm_enc(void *ctx, u8 *out,
 			const u8 *in, unsigned long plaintext_len, u8 *iv,
 			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
 			u8 *auth_tag, unsigned long auth_tag_len);
+asmlinkage void aesni_gcm_enc2(void *ctx, u8 *out,
+			const u8 *in, unsigned long plaintext_len, u8 *iv,
+			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
+			u8 *auth_tag, unsigned long auth_tag_len);
 
 /* asmlinkage void aesni_gcm_dec()
  * void *ctx, AES Key schedule. Starts on a 16 byte boundary.
@@ -782,10 +786,16 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 	}
 
 	kernel_fpu_begin();
-	printk("aesni_gcm_enc_tfm\n");
-	aesni_gcm_enc_tfm(aes_ctx, dst, src, req->cryptlen, iv,
-			  hash_subkey, assoc, assoclen,
-			  dst + req->cryptlen, auth_tag_len);
+	if (req->cryptlen == 64) {
+		printk("TEST aesni_gcm_enc_tfm len %i\n", req->cryptlen);
+		aesni_gcm_enc2(aes_ctx, dst, src, req->cryptlen, iv,
+				hash_subkey, assoc, assoclen,
+				dst + req->cryptlen, auth_tag_len);
+	} else {
+		aesni_gcm_enc_tfm(aes_ctx, dst, src, req->cryptlen, iv,
+				hash_subkey, assoc, assoclen,
+				dst + req->cryptlen, auth_tag_len);
+	}
 	kernel_fpu_end();
 
 	/* The authTag (aka the Integrity Check Value) needs to be written
