@@ -639,11 +639,46 @@ static int rfc4106_init(struct crypto_aead *aead)
 	return 0;
 }
 
+static int fallback_generic_gcmaes_init(struct crypto_aead *aead)
+{
+	struct crypto_aead **ctx = crypto_aead_ctx(aead);
+	struct crypto_aead *fallback_tfm;
+	struct crypto_aead *tfm;
+
+	tfm = crypto_alloc_aead("generic-gcm-aesni", 0,
+				CRYPTO_ALG_NEED_FALLBACK);
+
+	if (IS_ERR(tfm))
+		return PTR_ERR(tfm);
+
+	fallback_tfm = crypto_alloc_aead("gcm(aes)", 0,
+					CRYPTO_ALG_NEED_FALLBACK |
+					CRYPTO_ALG_ASYNC);
+
+	if (IS_ERR(fallback_tfm))
+		return PTR_ERR(fallback_tfm);
+
+	*ctx = tfm;
+	*(ctx + 1) = fallback_tfm;
+	crypto_aead_set_reqsize(aead, crypto_aead_reqsize(tfm));
+	crypto_aead_set_reqsize(aead, crypto_aead_reqsize(fallback_tfm));
+
+	return 0;
+}
+
 static void rfc4106_exit(struct crypto_aead *aead)
 {
 	struct cryptd_aead **ctx = crypto_aead_ctx(aead);
 
 	cryptd_free_aead(*ctx);
+}
+
+static void fallback_generic_gcmaes_exit(struct crypto_aead *aead)
+{
+	struct crypto_aead **ctx = crypto_aead_ctx(aead);
+
+	crypto_free_aead(*ctx);
+	crypto_free_aead(*(ctx + 1));
 }
 
 static int
@@ -699,6 +734,22 @@ static int rfc4106_set_key(struct crypto_aead *parent, const u8 *key,
 	return crypto_aead_setkey(&cryptd_tfm->base, key, key_len);
 }
 
+static int fallback_generic_gcmaes_set_key(struct crypto_aead *parent,
+					const u8 *key,
+					unsigned int key_len)
+{
+	struct crypto_aead **ctx = crypto_aead_ctx(parent);
+	struct crypto_aead *fallback_tfm = *(ctx + 1);
+	struct crypto_aead *tfm = *ctx;
+	int err;
+
+	err = crypto_aead_setkey(tfm, key, key_len);
+	if (err)
+		return err;
+
+	return crypto_aead_setkey(fallback_tfm, key, key_len);
+}
+
 static int common_rfc4106_set_authsize(struct crypto_aead *aead,
 				       unsigned int authsize)
 {
@@ -742,6 +793,21 @@ static int generic_gcmaes_set_authsize(struct crypto_aead *tfm,
 	}
 
 	return 0;
+}
+
+static int fallback_generic_gcmaes_set_authsize(struct crypto_aead *parent,
+				unsigned int authsize)
+{
+	struct crypto_aead **ctx = crypto_aead_ctx(parent);
+	struct crypto_aead *fallback_tfm = *(ctx + 1);
+	struct crypto_aead *tfm = *ctx;
+	int err;
+
+	err = crypto_aead_setauthsize(tfm, authsize);
+	if (err)
+		return err;
+
+	return crypto_aead_setauthsize(fallback_tfm, authsize);
 }
 
 static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
@@ -945,6 +1011,22 @@ static int rfc4106_encrypt(struct aead_request *req)
 	return crypto_aead_encrypt(req);
 }
 
+static int fallback_generic_gcmaes_encrypt(struct aead_request *req)
+{
+	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
+	struct crypto_aead **ctx = crypto_aead_ctx(tfm);
+	struct crypto_aead *fallback_tfm = *(ctx + 1);
+
+	tfm = *ctx;
+
+	if (!irq_fpu_usable() || in_atomic())
+		tfm = fallback_tfm;
+
+	aead_request_set_tfm(req, tfm);
+
+	return crypto_aead_encrypt(req);
+}
+
 static int rfc4106_decrypt(struct aead_request *req)
 {
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
@@ -955,6 +1037,22 @@ static int rfc4106_decrypt(struct aead_request *req)
 	if (irq_fpu_usable() && (!in_atomic() ||
 				 !cryptd_aead_queued(cryptd_tfm)))
 		tfm = cryptd_aead_child(cryptd_tfm);
+
+	aead_request_set_tfm(req, tfm);
+
+	return crypto_aead_decrypt(req);
+}
+
+static int fallback_generic_gcmaes_decrypt(struct aead_request *req)
+{
+	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
+	struct crypto_aead **ctx = crypto_aead_ctx(tfm);
+	struct crypto_aead *fallback_tfm = *ctx;
+
+	tfm = *ctx;
+
+	if (!irq_fpu_usable() || in_atomic())
+		tfm = fallback_tfm;
 
 	aead_request_set_tfm(req, tfm);
 
@@ -1176,6 +1274,25 @@ static struct aead_alg aesni_aead_algs[] = { {
 		.cra_flags		= CRYPTO_ALG_ASYNC,
 		.cra_blocksize		= 1,
 		.cra_ctxsize		= sizeof(struct generic_gcmaes_ctx),
+		.cra_alignmask		= AESNI_ALIGN - 1,
+		.cra_module		= THIS_MODULE,
+	},
+}, {
+	.init			= fallback_generic_gcmaes_init,
+	.exit			= fallback_generic_gcmaes_exit,
+	.setkey			= fallback_generic_gcmaes_set_key,
+	.setauthsize		= fallback_generic_gcmaes_set_authsize,
+	.encrypt		= fallback_generic_gcmaes_encrypt,
+	.decrypt		= fallback_generic_gcmaes_decrypt,
+	.ivsize			= GCM_AES_IV_SIZE,
+	.maxauthsize		= 16,
+	.base = {
+		.cra_name		= "gcm(aes)",
+		.cra_driver_name	= "generic-gcm-aesni",
+		.cra_priority		= 350,
+		.cra_flags		= CRYPTO_ALG_NEED_FALLBACK,
+		.cra_blocksize		= 1,
+		.cra_ctxsize		= sizeof(struct crypto_aead *) * 2,
 		.cra_alignmask		= AESNI_ALIGN - 1,
 		.cra_module		= THIS_MODULE,
 	},
