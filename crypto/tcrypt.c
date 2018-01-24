@@ -975,7 +975,7 @@ static inline int tcrypt_test(const char *alg)
 {
 	int ret;
 
-	pr_debug("testing %s\n", alg);
+	printk("testing %s\n", alg);
 
 	ret = alg_test(alg, alg, 0, 0);
 	/* non-fips algs return -EINVAL in fips mode */
@@ -2033,7 +2033,7 @@ static int __init tcrypt_mod_init(void)
 		printk(KERN_ERR "tcrypt: one or more tests failed!\n");
 		goto err_free_tv;
 	} else {
-		pr_debug("all tests passed\n");
+		printk("all tests passed\n");
 	}
 
 	/* We intentionaly return -EAGAIN to prevent keeping the module,

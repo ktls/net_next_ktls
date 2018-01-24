@@ -782,6 +782,7 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 	}
 
 	kernel_fpu_begin();
+	printk("aesni_gcm_enc_tfm\n");
 	aesni_gcm_enc_tfm(aes_ctx, dst, src, req->cryptlen, iv,
 			  hash_subkey, assoc, assoclen,
 			  dst + req->cryptlen, auth_tag_len);
@@ -1216,20 +1217,20 @@ static int __init aesni_init(void)
 	if (!x86_match_cpu(aesni_cpu_id))
 		return -ENODEV;
 #ifdef CONFIG_X86_64
-#ifdef CONFIG_AS_AVX2
-	if (boot_cpu_has(X86_FEATURE_AVX2)) {
-		pr_info("AVX2 version of gcm_enc/dec engaged.\n");
-		aesni_gcm_enc_tfm = aesni_gcm_enc_avx2;
-		aesni_gcm_dec_tfm = aesni_gcm_dec_avx2;
-	} else
-#endif
-#ifdef CONFIG_AS_AVX
-	if (boot_cpu_has(X86_FEATURE_AVX)) {
-		pr_info("AVX version of gcm_enc/dec engaged.\n");
-		aesni_gcm_enc_tfm = aesni_gcm_enc_avx;
-		aesni_gcm_dec_tfm = aesni_gcm_dec_avx;
-	} else
-#endif
+/* #ifdef CONFIG_AS_AVX2 */
+/* 	if (boot_cpu_has(X86_FEATURE_AVX2)) { */
+/* 		pr_info("AVX2 version of gcm_enc/dec engaged.\n"); */
+/* 		aesni_gcm_enc_tfm = aesni_gcm_enc_avx2; */
+/* 		aesni_gcm_dec_tfm = aesni_gcm_dec_avx2; */
+/* 	} else */
+/* #endif */
+/* #ifdef CONFIG_AS_AVX */
+/* 	if (boot_cpu_has(X86_FEATURE_AVX)) { */
+/* 		pr_info("AVX version of gcm_enc/dec engaged.\n"); */
+/* 		aesni_gcm_enc_tfm = aesni_gcm_enc_avx; */
+/* 		aesni_gcm_dec_tfm = aesni_gcm_dec_avx; */
+/* 	} else */
+/* #endif */
 	{
 		pr_info("SSE version of gcm_enc/dec engaged.\n");
 		aesni_gcm_enc_tfm = aesni_gcm_enc;
