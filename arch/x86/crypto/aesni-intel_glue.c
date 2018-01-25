@@ -803,12 +803,15 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 	}
 
 	kernel_fpu_begin();
-		struct gcm_context_data data;
+	struct gcm_context_data data;
 	if (req->cryptlen == 64) {
-		printk("TEST aesni_gcm_enc_tfm len %i\n", req->cryptlen);
+		memset(&data, 0, sizeof(data));
+		printk("TEST aesni_gcm_enc_tfm len %i %li %i\n", req->cryptlen,
+			data.aad_length ,assoclen);
 		aesni_gcm_enc2(aes_ctx, dst, src, req->cryptlen, iv,
 				hash_subkey, assoc, assoclen,
 			dst + req->cryptlen, auth_tag_len, &data);
+		printk("After enc2 adlen is %li\n", data.aad_length);
 	} else {
 		aesni_gcm_enc(aes_ctx, dst, src, req->cryptlen, iv,
 				hash_subkey, assoc, assoclen,
