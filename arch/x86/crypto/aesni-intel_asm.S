@@ -254,7 +254,7 @@ aad_shift_arr:
 	mov	%r13, %r12
 .endm
 
-.macro GCM_INIT2
+.macro GCM_INIT2 name
 
         # TODO AAD_HASH
         #        mov (%arg11, AadHash, 1)
@@ -298,6 +298,10 @@ aad_shift_arr:
 	mov	%arg4, %r13            # %xmm13 holds HashKey<<1 (mod poly)
 	and	$-16, %r13
 	mov	%r13, %r12
+
+        CALC_AAD_HASH \name %xmm13 %xmm0 %xmm1 %xmm2 %xmm3 %xmm4 \
+        %xmm5 %xmm6
+        mov %r13, %r12
 .endm
 
 .macro GCM_ENC_DEC1 ENC_DEC encrypt encrypted enc encr
@@ -944,20 +948,20 @@ _initial_blocks_done\num_initial_blocks\operation:
 .endm
 
 .macro CALC_AAD_HASH num_initial_blocks HASHKEY TMP1 TMP2 TMP3 TMP4 TMP5 \
-TMP6 i operation
+TMP6 TMP7 operation
         MOVADQ     SHUF_MASK(%rip), %xmm14
 	mov	   arg7, %r10           # %r10 = AAD
 	mov	   arg8, %r12           # %r12 = aadLen
 	mov	   %r12, %r11
-	pxor	   %xmm\i, %xmm\i
+	pxor	   \TMP7, \TMP7
 	pxor       \TMP6, \TMP6
 
 	cmp	   $16, %r11
 	jl	   _get_AAD_rest8\num_initial_blocks\operation
 _get_AAD_blocks\num_initial_blocks\operation:
-	movdqu	   (%r10), %xmm\i
-	PSHUFB_XMM %xmm14, %xmm\i # byte-reflect the AAD data
-	pxor	   %xmm\i, \TMP6
+	movdqu	   (%r10), \TMP7
+	PSHUFB_XMM %xmm14, \TMP7 # byte-reflect the AAD data
+	pxor	   \TMP7, \TMP6
 	GHASH_MUL  \TMP6, \HASHKEY, \TMP1, \TMP2, \TMP3, \TMP4, \TMP5
 	add	   $16, %r10
 	sub	   $16, %r12
@@ -965,11 +969,11 @@ _get_AAD_blocks\num_initial_blocks\operation:
 	cmp	   $16, %r11
 	jge	   _get_AAD_blocks\num_initial_blocks\operation
 
-	movdqu	   \TMP6, %xmm\i
+	movdqu	   \TMP6, \TMP7
 	cmp	   $0, %r11
 	je	   _get_AAD_done\num_initial_blocks\operation
 
-	pxor	   %xmm\i,%xmm\i
+	pxor	   \TMP7,\TMP7
 
 	/* read the last <16B of AAD. since we have at least 4B of
 	data right after the AAD (the ICV, and maybe some CT), we can
@@ -981,8 +985,8 @@ _get_AAD_rest8\num_initial_blocks\operation:
 	add	   $8, %r10
 	sub	   $8, %r11
 	pslldq	   $8, \TMP1
-	psrldq	   $8, %xmm\i
-	pxor	   \TMP1, %xmm\i
+	psrldq	   $8, \TMP7
+	pxor	   \TMP1, \TMP7
 	jmp	   _get_AAD_rest8\num_initial_blocks\operation
 _get_AAD_rest4\num_initial_blocks\operation:
 	cmp	   $0, %r11
@@ -992,8 +996,8 @@ _get_AAD_rest4\num_initial_blocks\operation:
 	add	   $4, %r10
 	sub	   $4, %r10
 	pslldq	   $12, \TMP1
-	psrldq	   $4, %xmm\i
-	pxor	   \TMP1, %xmm\i
+	psrldq	   $4, \TMP7
+	pxor	   \TMP1, \TMP7
 _get_AAD_rest0\num_initial_blocks\operation:
 	/* finalize: shift out the extra bytes we read, and align
 	left. since pslldq can only shift by an immediate, we use
@@ -1001,12 +1005,12 @@ _get_AAD_rest0\num_initial_blocks\operation:
 	movq	   %r12, %r11
 	salq	   $4, %r11
 	movdqu	   aad_shift_arr(%r11), \TMP1
-	PSHUFB_XMM \TMP1, %xmm\i
+	PSHUFB_XMM \TMP1, \TMP7
 _get_AAD_rest_final\num_initial_blocks\operation:
-	PSHUFB_XMM   %xmm14, %xmm\i # byte-reflect the AAD data
-	pxor	   \TMP6, %xmm\i
-	GHASH_MUL  %xmm\i, \HASHKEY, \TMP1, \TMP2, \TMP3, \TMP4, \TMP5
-        movdqu %xmm\i, \TMP6
+	PSHUFB_XMM   %xmm14, \TMP7 # byte-reflect the AAD data
+	pxor	   \TMP6, \TMP7
+	GHASH_MUL  \TMP7, \HASHKEY, \TMP1, \TMP2, \TMP3, \TMP4, \TMP5
+        movdqu \TMP7, \TMP6
 
 _get_AAD_done\num_initial_blocks\operation:
         mov arg11, %rax
@@ -1016,8 +1020,6 @@ _get_AAD_done\num_initial_blocks\operation:
 #HASH KEY is TMP3
 .macro INITIAL_BLOCKS2_ENC_DEC num_initial_blocks TMP1 TMP2 TMP3 TMP4 TMP5 XMM0 XMM1 \
 XMM2 XMM3 XMM4 XMMDst TMP6 TMP7 i i_seq operation enc
-        CALC_AAD_HASH \num_initial_blocks \TMP3 \TMP1 \TMP2 \TMP4 \TMP5 \XMM1 \
-        \XMM2 \i \operation
         mov arg11, %rax
         movdqu AadHash(%rax), %xmm\i
 
@@ -1953,7 +1955,7 @@ ENDPROC(aesni_gcm_dec)
 ENTRY(aesni_gcm_enc)
 	FUNC_SAVE
 
-	GCM_INIT2
+	GCM_INIT2 enc1
 
         GCM_ENC_DEC2 ENC encrypt encrypted enc 1
 
@@ -1966,7 +1968,7 @@ ENTRY(aesni_gcm_enc2)
 	FUNC_SAVE
 
         add $-16, %arg4
-	GCM_INIT2
+	GCM_INIT2 enc2
 
         GCM_ENC_DEC2 ENC2 encrypt2 encrypted2 enc 1
 
