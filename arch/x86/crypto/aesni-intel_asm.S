@@ -136,6 +136,14 @@ aad_shift_arr:
 				// (for Karatsuba purposes)
 #define	VARIABLE_OFFSET	16*8
 
+#define AadHash 16*0
+#define AadLen 16*1
+#define InLen (16*1)+8
+#define PBlockEncKey 16*2
+#define OrigIV 16*3
+#define CurCount 16*4
+#define PBlockLen 16*5
+
 #define arg1 rdi
 #define arg2 rsi
 #define arg3 rdx
@@ -146,6 +154,7 @@ aad_shift_arr:
 #define arg8 STACK_OFFSET+16(%r14)
 #define arg9 STACK_OFFSET+24(%r14)
 #define arg10 STACK_OFFSET+32(%r14)
+#define arg11 STACK_OFFSET+40(%r14)
 #define keysize 2*15*16(%arg1)
 #endif
 
@@ -1503,7 +1512,7 @@ ENTRY(aesni_gcm_enc2)
         add $48, %arg3
         mov $16, %arg4
 //	GCM_INIT
-// TODO
+// TODO cleanup
 	mov	%arg4, %r13            # %xmm13 holds HashKey<<1 (mod poly)
 	and	$-16, %r13
 	mov	%r13, %r12

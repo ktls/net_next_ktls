@@ -72,6 +72,19 @@ struct aesni_xts_ctx {
 	u8 raw_crypt_ctx[sizeof(struct crypto_aes_ctx)] AESNI_ALIGN_ATTR;
 };
 
+#define GCM_BLOCK_LEN 16
+
+struct gcm_context_data {
+	// init, update and finalize context data
+	u8 aad_hash[GCM_BLOCK_LEN];
+	u64 aad_length;
+	u64 in_length;
+	u8 partial_block_enc_key[GCM_BLOCK_LEN];
+	u8 orig_IV[GCM_BLOCK_LEN];
+	u8 current_counter[GCM_BLOCK_LEN];
+	u64 partial_block_len;
+};
+
 asmlinkage int aesni_set_key(struct crypto_aes_ctx *ctx, const u8 *in_key,
 			     unsigned int key_len);
 asmlinkage void aesni_enc(struct crypto_aes_ctx *ctx, u8 *out,
@@ -120,11 +133,13 @@ asmlinkage void aesni_xts_crypt8(struct crypto_aes_ctx *ctx, u8 *out,
 asmlinkage void aesni_gcm_enc(void *ctx, u8 *out,
 			const u8 *in, unsigned long plaintext_len, u8 *iv,
 			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
-			u8 *auth_tag, unsigned long auth_tag_len);
+			u8 *auth_tag, unsigned long auth_tag_len,
+			struct gcm_context_data* gdata);
 asmlinkage void aesni_gcm_enc2(void *ctx, u8 *out,
 			const u8 *in, unsigned long plaintext_len, u8 *iv,
 			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
-			u8 *auth_tag, unsigned long auth_tag_len);
+			u8 *auth_tag, unsigned long auth_tag_len,
+			struct gcm_context_data* gdata);
 
 /* asmlinkage void aesni_gcm_dec()
  * void *ctx, AES Key schedule. Starts on a 16 byte boundary.
@@ -177,9 +192,10 @@ static void aesni_gcm_enc_avx(void *ctx, u8 *out,
 			u8 *auth_tag, unsigned long auth_tag_len)
 {
         struct crypto_aes_ctx *aes_ctx = (struct crypto_aes_ctx*)ctx;
+	struct gcm_context_data data;
 	if ((plaintext_len < AVX_GEN2_OPTSIZE) || (aes_ctx-> key_length != AES_KEYSIZE_128)){
 		aesni_gcm_enc(ctx, out, in, plaintext_len, iv, hash_subkey, aad,
-				aad_len, auth_tag, auth_tag_len);
+			aad_len, auth_tag, auth_tag_len, &data);
 	} else {
 		aesni_gcm_precomp_avx_gen2(ctx, hash_subkey);
 		aesni_gcm_enc_avx_gen2(ctx, out, in, plaintext_len, iv, aad,
@@ -228,9 +244,10 @@ static void aesni_gcm_enc_avx2(void *ctx, u8 *out,
 			u8 *auth_tag, unsigned long auth_tag_len)
 {
        struct crypto_aes_ctx *aes_ctx = (struct crypto_aes_ctx*)ctx;
+       struct gcm_context_data data;
 	if ((plaintext_len < AVX_GEN2_OPTSIZE) || (aes_ctx-> key_length != AES_KEYSIZE_128)) {
 		aesni_gcm_enc(ctx, out, in, plaintext_len, iv, hash_subkey, aad,
-				aad_len, auth_tag, auth_tag_len);
+			aad_len, auth_tag, auth_tag_len, &data);
 	} else if (plaintext_len < AVX_GEN4_OPTSIZE) {
 		aesni_gcm_precomp_avx_gen2(ctx, hash_subkey);
 		aesni_gcm_enc_avx_gen2(ctx, out, in, plaintext_len, iv, aad,
@@ -786,15 +803,16 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 	}
 
 	kernel_fpu_begin();
+		struct gcm_context_data data;
 	if (req->cryptlen == 64) {
 		printk("TEST aesni_gcm_enc_tfm len %i\n", req->cryptlen);
 		aesni_gcm_enc2(aes_ctx, dst, src, req->cryptlen, iv,
 				hash_subkey, assoc, assoclen,
-				dst + req->cryptlen, auth_tag_len);
+			dst + req->cryptlen, auth_tag_len, &data);
 	} else {
-		aesni_gcm_enc_tfm(aes_ctx, dst, src, req->cryptlen, iv,
+		aesni_gcm_enc(aes_ctx, dst, src, req->cryptlen, iv,
 				hash_subkey, assoc, assoclen,
-				dst + req->cryptlen, auth_tag_len);
+				dst + req->cryptlen, auth_tag_len, &data);
 	}
 	kernel_fpu_end();
 
