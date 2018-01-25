@@ -479,7 +479,8 @@ _four_cipher_left_\encrypt:
 	GHASH_LAST_4	%xmm9, %xmm10, %xmm11, %xmm12, %xmm13, %xmm14, \
 %xmm15, %xmm1, %xmm2, %xmm3, %xmm4, %xmm8
 _zero_cipher_left_\encrypt:
-#TODO aadhash
+        mov arg11, %r10
+        movdqu %xmm8, AadHash(%r10)
         movdqu %xmm0, CurCount(%r10)
 	mov	%arg4, %r13
 	and	$15, %r13				# %r13 = arg4 (mod 16)
@@ -488,6 +489,7 @@ _zero_cipher_left_\encrypt:
         # Handle the last <16 byte block separately
 
 	paddd ONE(%rip), %xmm0         # increment CNT to get Yn
+        mov arg11, %r10
         movdqu %xmm0, CurCount(%r10)
         movdqa SHUF_MASK(%rip), %xmm10
 	PSHUFB_XMM %xmm10, %xmm0
@@ -522,6 +524,8 @@ _zero_cipher_left_\encrypt:
 
         pxor    %xmm0, %xmm8
 .endif
+        mov arg11, %r10
+        movdqu %xmm8, AadHash(%r10)
 	GHASH_MUL %xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
 	          # GHASH computation for the last <16 byte block
 	sub %r13, %r11
@@ -549,11 +553,13 @@ _less_than_8_bytes_left_\encrypt:
 	sub	$1, %r13
 	jne	_less_than_8_bytes_left_\encrypt
 _multiple_of_16_bytes_\encrypt:
-	mov	arg8, %r12		  # %r13 = aadLen (number of bytes)
+        mov arg11, %r10
+        mov AadLen(%r10), %r12  # %r13 = aadLen (number of bytes)
 	shl	$3, %r12		  # convert into number of bits
 	movd	%r12d, %xmm15		  # len(A) in %xmm15
-	shl	$3, %arg4		  # len(C) in bits (*128)
-	MOVQ_R64_XMM	%arg4, %xmm1
+        mov InLen(%r10), %r12
+	shl	$3, %r12		  # len(C) in bits (*128)
+	MOVQ_R64_XMM	%r12, %xmm1
 	pslldq	$8, %xmm15		  # %xmm15 = len(A)||0x0000000000000000
 	pxor	%xmm1, %xmm15		  # %xmm15 = len(A)||len(C)
 	pxor	%xmm15, %xmm8
@@ -562,8 +568,7 @@ _multiple_of_16_bytes_\encrypt:
         movdqa SHUF_MASK(%rip), %xmm10
 	PSHUFB_XMM %xmm10, %xmm8
 
-	mov	%arg5, %rax		  # %rax = *Y0
-	movdqu	(%rax), %xmm0		  # %xmm0 = Y0
+        movdqu OrigIV(%r10), %xmm0	  # %xmm0 = Y0
 	ENCRYPT_SINGLE_BLOCK	%xmm0,  %xmm1	  # E(K, Y0)
 	pxor	%xmm8, %xmm0
 _return_T_\encrypt:
