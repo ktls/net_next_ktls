@@ -811,7 +811,8 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 		aesni_gcm_enc2(aes_ctx, dst, src, req->cryptlen, iv,
 				hash_subkey, assoc, assoclen,
 			dst + req->cryptlen, auth_tag_len, &data);
-		printk("After enc2 adlen is %li\n", data.aad_length);
+		printk("After enc2 adlen is %li inlen is %li\n", data.aad_length,
+			data.in_length);
 	} else {
 		aesni_gcm_enc(aes_ctx, dst, src, req->cryptlen, iv,
 				hash_subkey, assoc, assoclen,
