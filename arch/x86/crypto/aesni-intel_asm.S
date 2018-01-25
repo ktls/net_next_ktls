@@ -943,29 +943,29 @@ _initial_blocks_done\num_initial_blocks\operation:
 
 .endm
 
-.macro INITIAL_BLOCKS2_ENC_DEC num_initial_blocks TMP1 TMP2 TMP3 TMP4 TMP5 XMM0 XMM1 \
-XMM2 XMM3 XMM4 XMMDst TMP6 TMP7 i i_seq operation enc
+.macro CALC_AAD_HASH num_initial_blocks HASHKEY TMP1 TMP2 TMP3 TMP4 TMP5 \
+TMP6 i operation
         MOVADQ     SHUF_MASK(%rip), %xmm14
 	mov	   arg7, %r10           # %r10 = AAD
 	mov	   arg8, %r12           # %r12 = aadLen
 	mov	   %r12, %r11
 	pxor	   %xmm\i, %xmm\i
-	pxor       \XMM2, \XMM2
+	pxor       \TMP6, \TMP6
 
 	cmp	   $16, %r11
 	jl	   _get_AAD_rest8\num_initial_blocks\operation
 _get_AAD_blocks\num_initial_blocks\operation:
 	movdqu	   (%r10), %xmm\i
 	PSHUFB_XMM %xmm14, %xmm\i # byte-reflect the AAD data
-	pxor	   %xmm\i, \XMM2
-	GHASH_MUL  \XMM2, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
+	pxor	   %xmm\i, \TMP6
+	GHASH_MUL  \TMP6, \HASHKEY, \TMP1, \TMP2, \TMP3, \TMP4, \TMP5
 	add	   $16, %r10
 	sub	   $16, %r12
 	sub	   $16, %r11
 	cmp	   $16, %r11
 	jge	   _get_AAD_blocks\num_initial_blocks\operation
 
-	movdqu	   \XMM2, %xmm\i
+	movdqu	   \TMP6, %xmm\i
 	cmp	   $0, %r11
 	je	   _get_AAD_done\num_initial_blocks\operation
 
@@ -1004,10 +1004,23 @@ _get_AAD_rest0\num_initial_blocks\operation:
 	PSHUFB_XMM \TMP1, %xmm\i
 _get_AAD_rest_final\num_initial_blocks\operation:
 	PSHUFB_XMM   %xmm14, %xmm\i # byte-reflect the AAD data
-	pxor	   \XMM2, %xmm\i
-	GHASH_MUL  %xmm\i, \TMP3, \TMP1, \TMP2, \TMP4, \TMP5, \XMM1
+	pxor	   \TMP6, %xmm\i
+	GHASH_MUL  %xmm\i, \HASHKEY, \TMP1, \TMP2, \TMP3, \TMP4, \TMP5
+        movdqu %xmm\i, \TMP6
 
 _get_AAD_done\num_initial_blocks\operation:
+        mov arg11, %rax
+        movdqu \TMP6, AadHash(%rax)
+.endm
+
+#HASH KEY is TMP3
+.macro INITIAL_BLOCKS2_ENC_DEC num_initial_blocks TMP1 TMP2 TMP3 TMP4 TMP5 XMM0 XMM1 \
+XMM2 XMM3 XMM4 XMMDst TMP6 TMP7 i i_seq operation enc
+        CALC_AAD_HASH \num_initial_blocks \TMP3 \TMP1 \TMP2 \TMP4 \TMP5 \XMM1 \
+        \XMM2 \i \operation
+        mov arg11, %rax
+        movdqu AadHash(%rax), %xmm\i
+
 	xor	   %r11, %r11 # initialise the data pointer offset as zero
 	# start AES for num_initial_blocks blocks
 
