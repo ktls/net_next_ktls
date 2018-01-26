@@ -159,7 +159,8 @@ asmlinkage void aesni_gcm_enc2(void *ctx, u8 *out,
 asmlinkage void aesni_gcm_dec(void *ctx, u8 *out,
 			const u8 *in, unsigned long ciphertext_len, u8 *iv,
 			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
-			u8 *auth_tag, unsigned long auth_tag_len);
+			u8 *auth_tag, unsigned long auth_tag_len,
+			struct gcm_context_data* gdata);
 
 
 #ifdef CONFIG_AS_AVX
@@ -210,8 +211,9 @@ static void aesni_gcm_dec_avx(void *ctx, u8 *out,
 {
         struct crypto_aes_ctx *aes_ctx = (struct crypto_aes_ctx*)ctx;
 	if ((ciphertext_len < AVX_GEN2_OPTSIZE) || (aes_ctx-> key_length != AES_KEYSIZE_128)) {
+		struct gcm_context_data data;
 		aesni_gcm_dec(ctx, out, in, ciphertext_len, iv, hash_subkey, aad,
-				aad_len, auth_tag, auth_tag_len);
+			aad_len, auth_tag, auth_tag_len, &data);
 	} else {
 		aesni_gcm_precomp_avx_gen2(ctx, hash_subkey);
 		aesni_gcm_dec_avx_gen2(ctx, out, in, ciphertext_len, iv, aad,
@@ -266,8 +268,9 @@ static void aesni_gcm_dec_avx2(void *ctx, u8 *out,
 {
        struct crypto_aes_ctx *aes_ctx = (struct crypto_aes_ctx*)ctx;
 	if ((ciphertext_len < AVX_GEN2_OPTSIZE) || (aes_ctx-> key_length != AES_KEYSIZE_128)) {
+		struct gcm_context_data data;
 		aesni_gcm_dec(ctx, out, in, ciphertext_len, iv, hash_subkey,
-				aad, aad_len, auth_tag, auth_tag_len);
+			aad, aad_len, auth_tag, auth_tag_len, &data);
 	} else if (ciphertext_len < AVX_GEN4_OPTSIZE) {
 		aesni_gcm_precomp_avx_gen2(ctx, hash_subkey);
 		aesni_gcm_dec_avx_gen2(ctx, out, in, ciphertext_len, iv, aad,
@@ -882,9 +885,10 @@ static int gcmaes_decrypt(struct aead_request *req, unsigned int assoclen,
 
 
 	kernel_fpu_begin();
-	aesni_gcm_dec_tfm(aes_ctx, dst, src, tempCipherLen, iv,
+	struct gcm_context_data data;
+	aesni_gcm_dec(aes_ctx, dst, src, tempCipherLen, iv,
 			  hash_subkey, assoc, assoclen,
-			  authTag, auth_tag_len);
+		authTag, auth_tag_len, &data);
 	kernel_fpu_end();
 
 	/* Compare generated tag with passed in tag. */

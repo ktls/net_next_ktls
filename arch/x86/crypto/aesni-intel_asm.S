@@ -294,14 +294,10 @@ aad_shift_arr:
 	pcmpeqd TWOONE(%rip), %xmm2
 	pand	POLY(%rip), %xmm2
 	pxor	%xmm2, %xmm13
-	movdqa	%xmm13, HashKey(%rsp)
-	mov	%arg4, %r13            # %xmm13 holds HashKey<<1 (mod poly)
-	and	$-16, %r13
-	mov	%r13, %r12
+	movdqa	%xmm13, HashKey(%rsp) # %xmm13 holds HashKey<<1 (mod poly)
 
         CALC_AAD_HASH \name %xmm13 %xmm0 %xmm1 %xmm2 %xmm3 %xmm4 \
         %xmm5 %xmm6
-        mov %r13, %r12
 .endm
 
 .macro GCM_ENC_DEC1 ENC_DEC encrypt encrypted enc encr
@@ -1905,19 +1901,39 @@ _esb_loop_\@:
 * poly = x^128 + x^127 + x^126 + x^121 + 1
 *
 *****************************************************************************/
+.macro CLEAN_REGS
+        xor %r10, %r10
+        xor %r11, %r11
+        xor %r12, %r12
+        xor %r13, %r13
+        xor %rax, %rax
+        pxor %xmm0, %xmm0
+        pxor %xmm1, %xmm1
+        pxor %xmm2, %xmm2
+        pxor %xmm3, %xmm3
+        pxor %xmm4, %xmm4
+        pxor %xmm5, %xmm5
+        pxor %xmm6, %xmm6
+        pxor %xmm7, %xmm7
+        pxor %xmm8, %xmm8
+        pxor %xmm9, %xmm9
+        pxor %xmm10, %xmm10
+        pxor %xmm11, %xmm11
+        pxor %xmm12, %xmm12
+        pxor %xmm13, %xmm13
+        pxor %xmm14, %xmm14
+.endm
+
 ENTRY(aesni_gcm_dec)
 	FUNC_SAVE
 
-	GCM_INIT
+	GCM_INIT2 foo
+        CLEAN_REGS
 
-        # Decrypt first few blocks
-
-	movdqa %xmm13, HashKey(%rsp)           # store HashKey<<1 (mod poly)
-	mov %arg4, %r13    # save the number of bytes of plaintext/ciphertext
-	and $-16, %r13                      # %r13 = %r13 - (%r13 mod 16)
-	mov %r13, %r12
-        GCM_ENC_DEC1 DEC decrypt decrypted dec 0
-        GCM_FINISH DEC
+        GCM_ENC_DEC2 DEC decrypt decrypted dec 0
+        CLEAN_REGS
+        GCM_FINISH2 DEC
+        CLEAN_REGS
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_dec)
@@ -2006,29 +2022,6 @@ ENDPROC(aesni_gcm_dec)
 *
 * poly = x^128 + x^127 + x^126 + x^121 + 1
 ***************************************************************************/
-.macro CLEAN_REGS
-        xor %r10, %r10
-        xor %r11, %r11
-        xor %r12, %r12
-        xor %r13, %r13
-        xor %rax, %rax
-        pxor %xmm0, %xmm0
-        pxor %xmm1, %xmm1
-        pxor %xmm2, %xmm2
-        pxor %xmm3, %xmm3
-        pxor %xmm4, %xmm4
-        pxor %xmm5, %xmm5
-        pxor %xmm6, %xmm6
-        pxor %xmm7, %xmm7
-        pxor %xmm8, %xmm8
-        pxor %xmm9, %xmm9
-        pxor %xmm10, %xmm10
-        pxor %xmm11, %xmm11
-        pxor %xmm12, %xmm12
-        pxor %xmm13, %xmm13
-        pxor %xmm14, %xmm14
-.endm
-
 ENTRY(aesni_gcm_enc)
 	FUNC_SAVE
 
@@ -2038,6 +2031,7 @@ ENTRY(aesni_gcm_enc)
         GCM_ENC_DEC2 ENC encrypt encrypted enc 1
         CLEAN_REGS
         GCM_FINISH2 ENC
+        CLEAN_REGS
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc)
@@ -2047,6 +2041,7 @@ ENTRY(aesni_gcm_enc2)
 
         add $-16, %arg4
 	GCM_INIT2 enc2
+        CLEAN_REGS
 
         GCM_ENC_DEC2 ENC2 encrypt2 encrypted2 enc 1
 
@@ -2059,6 +2054,7 @@ ENTRY(aesni_gcm_enc2)
         GCM_ENC_DEC2 ENC3 encrypt3 encrypted3 enc 1
         CLEAN_REGS
         GCM_FINISH2 ENC2
+        CLEAN_REGS
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc2)
