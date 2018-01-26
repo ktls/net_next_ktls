@@ -436,7 +436,13 @@ _return_T_\encrypt:
 
 .macro GCM_ENC_DEC2 ENC_DEC encrypt encrypted enc encr
         mov arg11, %r10
+        movdqu AadHash(%r10), %xmm8
+        movdqu HashKey(%rsp), %xmm13
         add %arg4, InLen(%r10)
+	mov %arg4, %r13    # save the number of bytes of plaintext/ciphertext
+	and $-16, %r13                      # %r13 = %r13 - (%r13 mod 16)
+	mov %r13, %r12
+
 	and $(3<<4), %r12
 	jz _initial_num_blocks_is_0_\encrypt
 	cmp $(2<<4), %r12
@@ -1067,6 +1073,7 @@ _get_AAD_done\num_initial_blocks\operation:
 #HASH KEY is TMP3
 .macro INITIAL_BLOCKS2_ENC_DEC num_initial_blocks TMP1 TMP2 TMP3 TMP4 TMP5 XMM0 XMM1 \
 XMM2 XMM3 XMM4 XMMDst TMP6 TMP7 i i_seq operation enc
+        MOVADQ     SHUF_MASK(%rip), %xmm14
         mov arg11, %rax
         movdqu AadHash(%rax), %xmm\i
 
@@ -2026,6 +2033,7 @@ ENTRY(aesni_gcm_enc)
 	FUNC_SAVE
 
 	GCM_INIT2 enc1
+        CLEAN_REGS
 
         GCM_ENC_DEC2 ENC encrypt encrypted enc 1
         CLEAN_REGS
@@ -2045,11 +2053,9 @@ ENTRY(aesni_gcm_enc2)
         add $48, %arg2
         add $48, %arg3
         mov $16, %arg4
-//	GCM_INIT
-// TODO cleanup
-	mov	%arg4, %r13            # %xmm13 holds HashKey<<1 (mod poly)
-	and	$-16, %r13
-	mov	%r13, %r12
+
+        CLEAN_REGS
+
         GCM_ENC_DEC2 ENC3 encrypt3 encrypted3 enc 1
         CLEAN_REGS
         GCM_FINISH2 ENC2
