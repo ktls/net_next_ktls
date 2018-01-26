@@ -525,9 +525,9 @@ _zero_cipher_left_\encrypt:
         pxor    %xmm0, %xmm8
 .endif
         mov arg11, %r10
-        movdqu %xmm8, AadHash(%r10)
 	GHASH_MUL %xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
 	          # GHASH computation for the last <16 byte block
+        movdqu %xmm8, AadHash(%r10)
 	sub %r13, %r11
 	add $16, %r11
 
@@ -553,7 +553,52 @@ _less_than_8_bytes_left_\encrypt:
 	sub	$1, %r13
 	jne	_less_than_8_bytes_left_\encrypt
 _multiple_of_16_bytes_\encrypt:
+.endm
+
+.macro GCM_FINISH ENC_DEC
+	mov	arg9, %r10                     # %r10 = authTag
+	mov	arg10, %r11                    # %r11 = auth_tag_len
+	cmp	$16, %r11
+	je	_T_16_\ENC_DEC
+	cmp	$8, %r11
+	jl	_T_4_\ENC_DEC
+_T_8_\ENC_DEC:
+	MOVQ_R64_XMM	%xmm0, %rax
+	mov	%rax, (%r10)
+	add	$8, %r10
+	sub	$8, %r11
+	psrldq	$8, %xmm0
+	cmp	$0, %r11
+	je	_return_T_done_\ENC_DEC
+_T_4_\ENC_DEC:
+	movd	%xmm0, %eax
+	mov	%eax, (%r10)
+	add	$4, %r10
+	sub	$4, %r11
+	psrldq	$4, %xmm0
+	cmp	$0, %r11
+	je	_return_T_done_\ENC_DEC
+_T_123_\ENC_DEC:
+	movd	%xmm0, %eax
+	cmp	$2, %r11
+	jl	_T_1_\ENC_DEC
+	mov	%ax, (%r10)
+	cmp	$2, %r11
+	je	_return_T_done_\ENC_DEC
+	add	$2, %r10
+	sar	$16, %eax
+_T_1_\ENC_DEC:
+	mov	%al, (%r10)
+	jmp	_return_T_done_\ENC_DEC
+_T_16_\ENC_DEC:
+	movdqu	%xmm0, (%r10)
+_return_T_done_\ENC_DEC:
+.endm
+
+.macro GCM_FINISH2 ENC_DEC
         mov arg11, %r10
+        movdqu AadHash(%r10), %xmm8
+        movdqu HashKey(%rsp), %xmm13
         mov AadLen(%r10), %r12  # %r13 = aadLen (number of bytes)
 	shl	$3, %r12		  # convert into number of bits
 	movd	%r12d, %xmm15		  # len(A) in %xmm15
@@ -571,10 +616,7 @@ _multiple_of_16_bytes_\encrypt:
         movdqu OrigIV(%r10), %xmm0	  # %xmm0 = Y0
 	ENCRYPT_SINGLE_BLOCK	%xmm0,  %xmm1	  # E(K, Y0)
 	pxor	%xmm8, %xmm0
-_return_T_\encrypt:
-.endm
-
-.macro GCM_FINISH ENC_DEC
+_return_T_\ENC_DEC:
 	mov	arg9, %r10                     # %r10 = authTag
 	mov	arg10, %r11                    # %r11 = auth_tag_len
 	cmp	$16, %r11
@@ -1957,14 +1999,37 @@ ENDPROC(aesni_gcm_dec)
 *
 * poly = x^128 + x^127 + x^126 + x^121 + 1
 ***************************************************************************/
+.macro CLEAN_REGS
+        xor %r10, %r10
+        xor %r11, %r11
+        xor %r12, %r12
+        xor %r13, %r13
+        xor %rax, %rax
+        pxor %xmm0, %xmm0
+        pxor %xmm1, %xmm1
+        pxor %xmm2, %xmm2
+        pxor %xmm3, %xmm3
+        pxor %xmm4, %xmm4
+        pxor %xmm5, %xmm5
+        pxor %xmm6, %xmm6
+        pxor %xmm7, %xmm7
+        pxor %xmm8, %xmm8
+        pxor %xmm9, %xmm9
+        pxor %xmm10, %xmm10
+        pxor %xmm11, %xmm11
+        pxor %xmm12, %xmm12
+        pxor %xmm13, %xmm13
+        pxor %xmm14, %xmm14
+.endm
+
 ENTRY(aesni_gcm_enc)
 	FUNC_SAVE
 
 	GCM_INIT2 enc1
 
         GCM_ENC_DEC2 ENC encrypt encrypted enc 1
-
-        GCM_FINISH ENC
+        CLEAN_REGS
+        GCM_FINISH2 ENC
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc)
@@ -1986,8 +2051,8 @@ ENTRY(aesni_gcm_enc2)
 	and	$-16, %r13
 	mov	%r13, %r12
         GCM_ENC_DEC2 ENC3 encrypt3 encrypted3 enc 1
-
-        GCM_FINISH ENC2
+        CLEAN_REGS
+        GCM_FINISH2 ENC2
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc2)
