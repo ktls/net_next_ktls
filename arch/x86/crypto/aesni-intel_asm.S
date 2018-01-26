@@ -2036,6 +2036,27 @@ ENTRY(aesni_gcm_enc)
 	ret
 ENDPROC(aesni_gcm_enc)
 
+ENTRY(aesni_gcm_init)
+	FUNC_SAVE
+	GCM_INIT2 enc4
+	FUNC_RESTORE
+	ret
+ENDPROC(aesni_gcm_init)
+
+ENTRY(aesni_gcm_continue)
+	FUNC_SAVE
+        GCM_ENC_DEC2 ENC4 encrypt4 encrypted4 enc 1
+	FUNC_RESTORE
+	ret
+ENDPROC(aesni_gcm_continue)
+
+ENTRY(aesni_gcm_finish)
+	FUNC_SAVE
+        GCM_FINISH2 ENC3
+	FUNC_RESTORE
+	ret
+ENDPROC(aesni_gcm_finish)
+
 ENTRY(aesni_gcm_enc2)
 	FUNC_SAVE
 

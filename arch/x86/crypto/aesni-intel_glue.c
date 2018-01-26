@@ -140,6 +140,21 @@ asmlinkage void aesni_gcm_enc2(void *ctx, u8 *out,
 			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
 			u8 *auth_tag, unsigned long auth_tag_len,
 			struct gcm_context_data* gdata);
+asmlinkage void aesni_gcm_init(void *ctx, u8 *out,
+			const u8 *in, unsigned long plaintext_len, u8 *iv,
+			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
+			u8 *auth_tag, unsigned long auth_tag_len,
+			struct gcm_context_data* gdata);
+asmlinkage void aesni_gcm_continue(void *ctx, u8 *out,
+			const u8 *in, unsigned long plaintext_len, u8 *iv,
+			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
+			u8 *auth_tag, unsigned long auth_tag_len,
+			struct gcm_context_data* gdata);
+asmlinkage void aesni_gcm_finish(void *ctx, u8 *out,
+			const u8 *in, unsigned long plaintext_len, u8 *iv,
+			u8 *hash_subkey, const u8 *aad, unsigned long aad_len,
+			u8 *auth_tag, unsigned long auth_tag_len,
+			struct gcm_context_data* gdata);
 
 /* asmlinkage void aesni_gcm_dec()
  * void *ctx, AES Key schedule. Starts on a 16 byte boundary.
@@ -811,7 +826,17 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 		memset(&data, 0, sizeof(data));
 		printk("TEST aesni_gcm_enc_tfm len %i %li %i\n", req->cryptlen,
 			data.aad_length ,assoclen);
-		aesni_gcm_enc2(aes_ctx, dst, src, req->cryptlen, iv,
+		int split = 16;
+		aesni_gcm_init(aes_ctx, dst, src, req->cryptlen, iv,
+				hash_subkey, assoc, assoclen,
+			dst + req->cryptlen, auth_tag_len, &data);
+		aesni_gcm_continue(aes_ctx, dst, src, split, iv,
+				hash_subkey, assoc, assoclen,
+			dst + req->cryptlen, auth_tag_len, &data);
+		aesni_gcm_continue(aes_ctx, dst + split, src + split, req->cryptlen - split, iv,
+				hash_subkey, assoc, assoclen,
+			dst + req->cryptlen, auth_tag_len, &data);
+		aesni_gcm_finish(aes_ctx, dst, src, req->cryptlen, iv,
 				hash_subkey, assoc, assoclen,
 			dst + req->cryptlen, auth_tag_len, &data);
 		printk("After enc2 adlen is %li inlen is %li\n", data.aad_length,
