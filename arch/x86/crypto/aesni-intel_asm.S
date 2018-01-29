@@ -544,11 +544,7 @@ _data_read_\encrypt:
         pxor    %xmm0, %xmm8
 .endif
         mov arg11, %r10
-	GHASH_MUL %xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
-	          # GHASH computation for the last <16 byte block
         movdqu %xmm8, AadHash(%r10)
-	sub %r13, %r11
-	add $16, %r11
 
 .if \encr == 1
        movdqa SHUF_MASK(%rip), %xmm10
@@ -618,6 +614,15 @@ _return_T_done_\ENC_DEC:
         mov arg11, %r10
         movdqu AadHash(%r10), %xmm8
         movdqu HashKey(%rsp), %xmm13
+        mov PBlockLen(%r10), %r12
+
+        cmp $0, %r12
+        je _partial_done\ENC_DEC
+
+	GHASH_MUL %xmm8, %xmm13, %xmm9, %xmm10, %xmm11, %xmm5, %xmm6
+	          # GHASH computation for the last <16 byte block
+
+_partial_done\ENC_DEC:
         mov AadLen(%r10), %r12  # %r13 = aadLen (number of bytes)
 	shl	$3, %r12		  # convert into number of bits
 	movd	%r12d, %xmm15		  # len(A) in %xmm15
