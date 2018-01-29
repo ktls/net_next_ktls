@@ -488,6 +488,8 @@ _zero_cipher_left_\encrypt:
 	and	$15, %r13				# %r13 = arg4 (mod 16)
 	je	_multiple_of_16_bytes_\encrypt
 
+        mov arg11, %r10
+        mov %r13, PBlockLen(%r10)
         # Handle the last <16 byte block separately
 
 	paddd ONE(%rip), %xmm0         # increment CNT to get Yn
@@ -497,6 +499,19 @@ _zero_cipher_left_\encrypt:
 	PSHUFB_XMM %xmm10, %xmm0
 
 	ENCRYPT_SINGLE_BLOCK  %xmm0, %xmm1    # E(K, Yn)
+        mov arg11, %r10
+        movdqu %xmm0, PBlockEncKey(%r10)
+
+        cmp $16, %arg4
+        jge _large_enough_update_\encrypt
+
+        lea (%arg3,%r11,1), %r10
+        READ_SMALL_DATA_INPUT \encrypt %xmm1 %r10 %r13 %r12 %r15 %rax
+	lea SHIFT_MASK+16(%rip), %r12
+	sub %r13, %r12
+        jmp _data_read_\encrypt
+
+_large_enough_update_\encrypt:
 	sub $16, %r11
 	add %r13, %r11
 	movdqu (%arg3,%r11,1), %xmm1   # receive the last <16 byte block
@@ -506,6 +521,8 @@ _zero_cipher_left_\encrypt:
         # (%r13 is the number of bytes in plaintext mod 16)
 	movdqu (%r12), %xmm2           # get the appropriate shuffle mask
 	PSHUFB_XMM %xmm2, %xmm1            # right shift 16-%r13 butes
+
+_data_read_\encrypt:
 
 .if \encr == 0
 	movdqa  %xmm1, %xmm2
@@ -1064,6 +1081,47 @@ _get_AAD_rest_final\num_initial_blocks\operation:
 _get_AAD_done\num_initial_blocks\operation:
         mov arg11, %rax
         movdqu \TMP6, AadHash(%rax)
+.endm
+
+/* READ_SMALL_DATA_INPUT: Packs xmm register with data when data input is less than 16 bytes.
+* Returns 0 if data has length 0.
+* Input: The input data (INPUT), that data's length (LENGTH).
+* Output: The packed xmm register (OUTPUT).
+* temp: END_READ_LOCATION COUNTER TMP1
+*/
+.macro READ_SMALL_DATA_INPUT	encrypt OUTPUT INPUT LENGTH END_READ_LOCATION COUNTER TMP1
+	pxor	\OUTPUT, \OUTPUT
+	mov	\LENGTH, \COUNTER
+	mov	\INPUT, \END_READ_LOCATION
+	add	\LENGTH, \END_READ_LOCATION
+	xor	\TMP1, \TMP1
+
+	cmp	$8, \COUNTER
+	jl	_byte_loop_2_\encrypt
+	vpinsrq	$0, (\INPUT), \OUTPUT, \OUTPUT		# Read in 8 bytes if they exists
+	je	_done_\encrypt
+
+	sub	$8, \COUNTER
+
+_byte_loop_1_\encrypt:					# Read in data 1 byte at a time while data is left
+	shl	$8, \TMP1			# This loop handles when 8 bytes were already read in
+	dec	\END_READ_LOCATION
+	mov	(\END_READ_LOCATION), \TMP1
+	dec	\COUNTER
+	jg	_byte_loop_1_\encrypt
+	vpinsrq	$1, \TMP1, \OUTPUT, \OUTPUT
+	jmp	_done_\encrypt
+
+_byte_loop_2_\encrypt:					#Read in data 1 byte at a time while data is left
+	cmp	$0, \COUNTER
+	je	_done_\encrypt
+	shl	$8, \TMP1			#This loop handles when no bytes were already read in
+	dec	\END_READ_LOCATION
+	mov	(\END_READ_LOCATION), \TMP1
+	dec	\COUNTER
+	jg	_byte_loop_2_\encrypt
+	vpinsrq	$0, \TMP1, \OUTPUT, \OUTPUT
+_done_\encrypt:
 .endm
 
 #HASH KEY is TMP3
