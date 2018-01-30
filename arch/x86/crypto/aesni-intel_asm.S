@@ -520,6 +520,8 @@ _large_enough_update_\encrypt:
 	sub $16, %r11
 	add %r13, %r11
 	movdqu (%arg3,%r11,1), %xmm1   # receive the last <16 byte block
+        sub %r13, %r11 #TODO
+        add $16, %r11
 	lea SHIFT_MASK+16(%rip), %r12
 	sub %r13, %r12
         # adjust the shuffle mask pointer to be able to shift 16-%r13 bytes
@@ -2237,12 +2239,12 @@ ENTRY(aesni_gcm_enc)
 	FUNC_SAVE
 
 	GCM_INIT2 enc1
-        CLEAN_REGS
+#        CLEAN_REGS
 
         GCM_ENC_DEC2 ENC encrypt encrypted enc 1
-        CLEAN_REGS
+#        CLEAN_REGS
         GCM_FINISH2 ENC
-        CLEAN_REGS
+#        CLEAN_REGS
 	FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc)
@@ -2264,6 +2266,7 @@ ENDPROC(aesni_gcm_continue)
 
 ENTRY(aesni_gcm_finish)
 	FUNC_SAVE
+        GCM_INIT
         GCM_FINISH2 ENC3
 	FUNC_RESTORE
 	ret
