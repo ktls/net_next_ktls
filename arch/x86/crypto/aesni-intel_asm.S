@@ -117,7 +117,7 @@ aad_shift_arr:
 .text
 
 
-#define	STACK_OFFSET    8*3
+#define	STACK_OFFSET    8*4
 #define	HashKey		16*0	// store HashKey <<1 mod poly here
 #define	HashKey_2	16*1	// store HashKey^2 <<1 mod poly here
 #define	HashKey_3	16*2	// store HashKey^3 <<1 mod poly here
@@ -208,6 +208,7 @@ aad_shift_arr:
 	push	%r12
 	push	%r13
 	push	%r14
+        push    %r15
 	mov	%rsp, %r14
 #
 # states of %xmm registers %xmm6:%xmm15 not saved
@@ -220,6 +221,7 @@ aad_shift_arr:
 
 .macro FUNC_RESTORE
 	mov	%r14, %rsp
+        pop     %r15
 	pop	%r14
 	pop	%r13
 	pop	%r12
