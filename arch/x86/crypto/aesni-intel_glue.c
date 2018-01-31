@@ -787,13 +787,27 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 			  u8 *hash_subkey, u8 *iv, void *aes_ctx)
 {
 	u8 one_entry_in_sg = 0;
+	u8 crypt_by_sg = 0;
 	u8 *src, *dst, *assoc;
 	struct crypto_aead *tfm = crypto_aead_reqtfm(req);
 	unsigned long auth_tag_len = crypto_aead_authsize(tfm);
 	struct scatter_walk src_sg_walk;
 	struct scatter_walk dst_sg_walk = {};
+	int nents_for_len = sg_nents_for_len(req->dst, req->cryptlen + auth_tag_len);
+	struct scatterlist* last = sg_last(req->dst, nents_for_len);
 
-	if (sg_is_last(req->src) &&
+	if (req->src->length > assoclen && last->length > auth_tag_len) {
+		printk("Crypt by sg\n");
+		crypt_by_sg = 1;
+		scatterwalk_start(&src_sg_walk, req->src);
+		assoc = scatterwalk_map(&src_sg_walk);
+		src = assoc;
+		if (req->src != req->dst) {
+			scatterwalk_start(&dst_sg_walk, req->dst);
+			scatterwalk_advance(&dst_sg_walk, req->assoclen);
+			dst = scatterwalk_map(&dst_sg_walk);
+		}
+	} else if (sg_is_last(req->src) &&
 	    (!PageHighMem(sg_page(req->src)) ||
 	    req->src->offset + req->src->length <= PAGE_SIZE) &&
 	    sg_is_last(req->dst) &&
@@ -820,37 +834,108 @@ static int gcmaes_encrypt(struct aead_request *req, unsigned int assoclen,
 		dst = src;
 	}
 
-	kernel_fpu_begin();
 	struct gcm_context_data data;
-	if (req->cryptlen == 64) {
-		memset(&data, 0, sizeof(data));
-		printk("TEST aesni_gcm_enc_tfm len %i %li %i\n", req->cryptlen,
-			data.aad_length ,assoclen);
-		int split = 16;
+	kernel_fpu_begin();
+	if (crypt_by_sg) {
 		aesni_gcm_init(aes_ctx, dst, src, req->cryptlen, iv,
-				hash_subkey, assoc, assoclen,
-			dst + req->cryptlen, auth_tag_len, &data);
-		aesni_gcm_continue(aes_ctx, dst, src, split, iv,
-				hash_subkey, assoc, assoclen,
-			dst + req->cryptlen, auth_tag_len, &data);
-		aesni_gcm_continue(aes_ctx, dst + split, src + split, req->cryptlen - split, iv,
-				hash_subkey, assoc, assoclen,
-			dst + req->cryptlen, auth_tag_len, &data);
-		aesni_gcm_finish(aes_ctx, dst, src, req->cryptlen, iv,
-				hash_subkey, assoc, assoclen,
-			dst + req->cryptlen, auth_tag_len, &data);
-		printk("After enc2 adlen is %li inlen is %li\n", data.aad_length,
-			data.in_length);
+			hash_subkey, assoc, assoclen,
+			dst, auth_tag_len, &data);
+		printk("Advance assoclen %i\n", assoclen);
+		scatterwalk_unmap(&src_sg_walk);
+		scatterwalk_advance(&src_sg_walk, assoclen);
+		src = scatterwalk_map(&src_sg_walk);
+		u8 left = req->cryptlen;
+		if (req->src != req->dst) {
+			printk("not in place\n");
+			while (left) {
+				unsigned int srclen = scatterwalk_pagelen(&src_sg_walk);
+				unsigned int dstlen = scatterwalk_pagelen(&dst_sg_walk);
+				if (src > dst) {
+					aesni_gcm_continue(aes_ctx, dst, src, dstlen, iv,
+							hash_subkey, assoc, assoclen,
+							dst, auth_tag_len, &data);
+					scatterwalk_unmap(&dst_sg_walk);
+					scatterwalk_advance(&dst_sg_walk, dstlen);
+					scatterwalk_advance(&src_sg_walk, dstlen);
+					dst = scatterwalk_map(&dst_sg_walk);
+					src += dstlen;
+					left -= dstlen;
+				} else if (dst < src) {
+					aesni_gcm_continue(aes_ctx, dst, src, srclen, iv,
+							hash_subkey, assoc, assoclen,
+							dst, auth_tag_len, &data);
+					scatterwalk_unmap(&src_sg_walk);
+					scatterwalk_advance(&src_sg_walk, srclen);
+					scatterwalk_advance(&dst_sg_walk, srclen);
+					src = scatterwalk_map(&src_sg_walk);
+					dst += srclen;
+					left -= srclen;
+				} else {
+					aesni_gcm_continue(aes_ctx, dst, src, srclen, iv,
+							hash_subkey, assoc, assoclen,
+							dst, auth_tag_len, &data);
+					scatterwalk_unmap(&src_sg_walk);
+					scatterwalk_unmap(&dst_sg_walk);
+					scatterwalk_advance(&src_sg_walk, srclen);
+					scatterwalk_advance(&dst_sg_walk, srclen);
+					dst = scatterwalk_map(&dst_sg_walk);
+					src = scatterwalk_map(&src_sg_walk);
+					left -= srclen;
+				}
+			}
+			/* Write auth tag len */
+			aesni_gcm_finish(aes_ctx, dst, src, req->cryptlen, iv,
+					hash_subkey, assoc, assoclen,
+					dst, auth_tag_len, &data);
+			scatterwalk_advance(&dst_sg_walk, auth_tag_len);
+		} else {
+			/* src == dst crypt */
+			printk("inplace\n");
+			while (left) {
+				unsigned int len = scatterwalk_pagelen(&src_sg_walk);
+				printk("Doing pagelen len %i left %i cryptlen %i src %p\n",
+					len, left, req->cryptlen,src);
+				printk("umap\n");
+				scatterwalk_unmap(&src_sg_walk);
+				printk("map\n");
+				scatterwalk_map(&src_sg_walk);
+				aesni_gcm_continue(aes_ctx, src, src, len, iv,
+						hash_subkey, assoc, assoclen,
+						dst, auth_tag_len, &data);
+				printk("umap\n");
+				scatterwalk_unmap(&src_sg_walk);
+				printk("doe continue\n");
+				scatterwalk_advance(&src_sg_walk, len);
+				printk("done advance\n");
+				left -= len;
+				printk("unmap left %i len %i\n", left, len);
+				src = scatterwalk_map(&src_sg_walk);
+				printk("map %p\n", src);
+			}
+			/* Write auth tag len */
+			printk("finish\n");
+			aesni_gcm_finish(aes_ctx, src, src, req->cryptlen, iv,
+					hash_subkey, assoc, assoclen,
+					src, auth_tag_len, &data);
+			scatterwalk_advance(&src_sg_walk, auth_tag_len);
+		}
 	} else {
 		aesni_gcm_enc(aes_ctx, dst, src, req->cryptlen, iv,
-				hash_subkey, assoc, assoclen,
-				dst + req->cryptlen, auth_tag_len, &data);
+			hash_subkey, assoc, assoclen,
+			dst + req->cryptlen, auth_tag_len, &data);
 	}
 	kernel_fpu_end();
 
 	/* The authTag (aka the Integrity Check Value) needs to be written
 	 * back to the packet. */
-	if (one_entry_in_sg) {
+	if (crypt_by_sg) {
+		if (req->src != req->dst) {
+			scatterwalk_unmap(dst - req->assoclen);
+			scatterwalk_done(&dst_sg_walk, 1, 0);
+		}
+		scatterwalk_unmap(assoc);
+		scatterwalk_done(&src_sg_walk, req->src == req->dst, 0);
+	} else if (one_entry_in_sg) {
 		if (unlikely(req->src != req->dst)) {
 			scatterwalk_unmap(dst - req->assoclen);
 			scatterwalk_advance(&dst_sg_walk, req->dst->length);
