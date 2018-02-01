@@ -521,13 +521,18 @@ _zero_cipher_left_\encrypt:
 _large_enough_update_\encrypt:
 	sub $16, %r11
 	add %r13, %r11
+
 	movdqu (%arg3,%r11,1), %xmm1   # receive the last <16 byte block
-        sub %r13, %r11 #TODO
+
+        sub %r13, %r11
         add $16, %r11
+
 	lea SHIFT_MASK+16(%rip), %r12
 	sub %r13, %r12
+
         # adjust the shuffle mask pointer to be able to shift 16-%r13 bytes
         # (%r13 is the number of bytes in plaintext mod 16)
+
 	movdqu (%r12), %xmm2           # get the appropriate shuffle mask
 	PSHUFB_XMM %xmm2, %xmm1            # right shift 16-%r13 butes
 
@@ -1169,7 +1174,7 @@ _data_read_\ENC_DEC:				#Finished reading in data
 
         mov arg11, %r10
         movdqu PBlockEncKey(%r10), %xmm9        #xmm9 = ctx_data.partial_block_enc_key
-        movdqu HashKey(%r10), %xmm13
+        movdqu HashKey(%rsp), %xmm13
 
 	lea SHIFT_MASK(%rip), %r12
 
