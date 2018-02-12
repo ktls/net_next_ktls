@@ -718,10 +718,12 @@ static int decrypt_skb(struct sock *sk, struct sk_buff *skb,
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
 	char iv[TLS_CIPHER_AES_GCM_128_SALT_SIZE + tls_ctx->rx.iv_size];
-	struct scatterlist sgin[MAX_SKB_FRAGS + 1];
+	struct scatterlist sgin_arr[MAX_SKB_FRAGS + 2];
+	struct scatterlist *sgin = &sgin_arr[0];
 	struct strp_msg *rxm = strp_msg(skb);
+	int ret, nsg = ARRAY_SIZE(sgin_arr);
 	char aad_recv[TLS_AAD_SPACE_SIZE];
-	int ret, nsg;
+	struct sk_buff *unused;
 
 	ret = skb_copy_bits(skb, rxm->offset + TLS_HEADER_SIZE,
 			    iv + TLS_CIPHER_AES_GCM_128_SALT_SIZE,
@@ -730,20 +732,20 @@ static int decrypt_skb(struct sock *sk, struct sk_buff *skb,
 		return ret;
 
 	memcpy(iv, tls_ctx->rx.iv, TLS_CIPHER_AES_GCM_128_SALT_SIZE);
+	if (skb_has_frag_list(skb) || !sgout) {
+		nsg = skb_cow_data(skb, 0, &unused) + 1;
+		sgin = kmalloc(sizeof(struct scatterlist) * nsg,
+			sk->sk_allocation);
+		if (!sgout)
+			sgout = sgin;
+	}
 
-	sg_init_table(sgin, ARRAY_SIZE(sgin));
+	sg_init_table(sgin, nsg);
 	sg_set_buf(&sgin[0], aad_recv, sizeof(aad_recv));
 
 	nsg = skb_to_sgvec(skb, &sgin[1],
-			   rxm->offset + tls_ctx->rx.prepend_size,
-			   rxm->full_len - tls_ctx->rx.prepend_size);
-
-	/* The length of sg into decryption must not be over
-	 * ALG_MAX_PAGES. The aad takes the first sg, so the payload
-	 * must be less than ALG_MAX_PAGES - 1
-	 */
-	if (nsg > MAX_SKB_FRAGS - 1)
-		return -EBADMSG;
+			rxm->offset + tls_ctx->rx.prepend_size,
+			rxm->full_len - tls_ctx->rx.prepend_size);
 
 	tls_make_aad(aad_recv,
 		     rxm->full_len - tls_ctx->rx.overhead_size,
@@ -751,52 +753,14 @@ static int decrypt_skb(struct sock *sk, struct sk_buff *skb,
 		     tls_ctx->rx.rec_seq_size,
 		     ctx->control);
 
-	return tls_do_decryption(sk, sgin, sgout, iv,
+	ret = tls_do_decryption(sk, sgin, sgout, iv,
 				 rxm->full_len - tls_ctx->rx.overhead_size,
 				 skb, sk->sk_allocation);
-}
 
-/* Decrypt in to a new skb.  Used in the slow path of recvmsg if the provided
- * buffer is too small, and for splice_read
- */
-static struct sk_buff *decrypt_skb_copy(struct sock *sk, struct sk_buff *skb,
-					int *err, struct strp_msg **rxm)
-{
-	struct tls_context *tls_ctx = tls_get_ctx(sk);
-	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
-	struct scatterlist sgin[MAX_SKB_FRAGS + 1];
-	struct sk_buff *outskb;
-	int len, offset;
+	if (sgin != &sgin_arr[0])
+		kfree(sgin);
 
-	*rxm = strp_msg(skb);
-	sg_init_table(sgin, MAX_SKB_FRAGS + 1);
-	outskb = alloc_skb((*rxm)->full_len, sk->sk_allocation);
-	if (!outskb) {
-		*err = -ENOMEM;
-		tls_err_abort(sk, EBADMSG);
-		return NULL;
-	}
-
-	skb_put(outskb, (*rxm)->full_len);
-	len = (*rxm)->full_len;
-	offset = (*rxm)->offset;
-	sg_set_buf(&sgin[0], outskb->data, len);
-
-	*rxm = strp_msg(outskb);
-	(*rxm)->offset = tls_ctx->rx.prepend_size;
-	(*rxm)->full_len = len - tls_ctx->rx.overhead_size;
-	*err = decrypt_skb(sk, skb, sgin);
-
-	if (*err < 0) {
-		kfree(outskb);
-		tls_err_abort(sk, EBADMSG);
-		return NULL;
-	}
-	kfree_skb(skb);
-	ctx->recv_pkt = outskb;
-	ctx->decrypted = true;
-
-	return outskb;
+	return ret;
 }
 
 static bool tls_sw_advance_skb(struct sock *sk, struct sk_buff *skb,
@@ -876,7 +840,7 @@ int tls_sw_recvmsg(struct sock *sk,
 			page_count = iov_iter_npages(&msg->msg_iter,
 						     MAX_SKB_FRAGS);
 			to_copy = rxm->full_len - tls_ctx->rx.overhead_size;
-			if (to_copy <= len && page_count < MAX_SKB_FRAGS &&
+			if (false && to_copy <= len && page_count < MAX_SKB_FRAGS &&
 			    likely(!(flags & MSG_PEEK)))  {
 				struct scatterlist sgin[MAX_SKB_FRAGS + 1];
 				char unused[21];
@@ -902,9 +866,11 @@ int tls_sw_recvmsg(struct sock *sk,
 				}
 			} else {
 fallback_to_reg_recv:
-				skb = decrypt_skb_copy(sk, skb, &err, &rxm);
-				if (!skb)
+				err = decrypt_skb(sk, skb, NULL);
+				if (err < 0) {
+					tls_err_abort(sk, EBADMSG);
 					goto recv_end;
+				}
 			}
 			ctx->decrypted = true;
 		}
@@ -945,8 +911,8 @@ ssize_t tls_sw_splice_read(struct socket *sock,  loff_t *ppos,
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sock->sk);
 	struct tls_sw_context *ctx = tls_sw_ctx(tls_ctx);
+	struct strp_msg *rxm = NULL;
 	struct sock *sk = sock->sk;
-	struct strp_msg *rxm;
 	struct sk_buff *skb;
 	ssize_t copied = 0;
 	int err = 0;
@@ -968,10 +934,15 @@ ssize_t tls_sw_splice_read(struct socket *sock,  loff_t *ppos,
 	}
 
 	if (!ctx->decrypted) {
-		skb = decrypt_skb_copy(sk, skb, &err, &rxm);
-		if (!skb)
+		err = decrypt_skb(sk, skb, NULL);
+
+		if (err < 0) {
+			tls_err_abort(sk, EBADMSG);
 			goto splice_read_end;
+		}
+		ctx->decrypted = true;
 	}
+	rxm = strp_msg(skb);
 
 	chunk = min_t(unsigned int, rxm->full_len, len);
 	copied = skb_splice_bits(skb, sk, rxm->offset, pipe, chunk, flags);
