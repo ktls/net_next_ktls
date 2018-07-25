@@ -203,22 +203,22 @@ aad_shift_arr:
 #        u8 shifted_hkey_8_k[16] store XOR HashKey^8 <<1 mod poly here (for Karatsuba purposes)
 #} gcm_ctx#
 
-HashKey        = 16*11   # store HashKey <<1 mod poly here
-HashKey_2      = 16*12   # store HashKey^2 <<1 mod poly here
-HashKey_3      = 16*13   # store HashKey^3 <<1 mod poly here
-HashKey_4      = 16*14   # store HashKey^4 <<1 mod poly here
-HashKey_5      = 16*15   # store HashKey^5 <<1 mod poly here
-HashKey_6      = 16*16   # store HashKey^6 <<1 mod poly here
-HashKey_7      = 16*17   # store HashKey^7 <<1 mod poly here
-HashKey_8      = 16*18   # store HashKey^8 <<1 mod poly here
-HashKey_k      = 16*19   # store XOR of HashKey <<1 mod poly here (for Karatsuba purposes)
-HashKey_2_k    = 16*20   # store XOR of HashKey^2 <<1 mod poly here (for Karatsuba purposes)
-HashKey_3_k    = 16*21   # store XOR of HashKey^3 <<1 mod poly here (for Karatsuba purposes)
-HashKey_4_k    = 16*22   # store XOR of HashKey^4 <<1 mod poly here (for Karatsuba purposes)
-HashKey_5_k    = 16*23   # store XOR of HashKey^5 <<1 mod poly here (for Karatsuba purposes)
-HashKey_6_k    = 16*24   # store XOR of HashKey^6 <<1 mod poly here (for Karatsuba purposes)
-HashKey_7_k    = 16*25   # store XOR of HashKey^7 <<1 mod poly here (for Karatsuba purposes)
-HashKey_8_k    = 16*26   # store XOR of HashKey^8 <<1 mod poly here (for Karatsuba purposes)
+HashKey        = 16*6   # store HashKey <<1 mod poly here
+HashKey_2      = 16*7   # store HashKey^2 <<1 mod poly here
+HashKey_3      = 16*8   # store HashKey^3 <<1 mod poly here
+HashKey_4      = 16*9   # store HashKey^4 <<1 mod poly here
+HashKey_5      = 16*10   # store HashKey^5 <<1 mod poly here
+HashKey_6      = 16*11   # store HashKey^6 <<1 mod poly here
+HashKey_7      = 16*12   # store HashKey^7 <<1 mod poly here
+HashKey_8      = 16*13   # store HashKey^8 <<1 mod poly here
+HashKey_k      = 16*14   # store XOR of HashKey <<1 mod poly here (for Karatsuba purposes)
+HashKey_2_k    = 16*15   # store XOR of HashKey^2 <<1 mod poly here (for Karatsuba purposes)
+HashKey_3_k    = 16*16   # store XOR of HashKey^3 <<1 mod poly here (for Karatsuba purposes)
+HashKey_4_k    = 16*17   # store XOR of HashKey^4 <<1 mod poly here (for Karatsuba purposes)
+HashKey_5_k    = 16*18   # store XOR of HashKey^5 <<1 mod poly here (for Karatsuba purposes)
+HashKey_6_k    = 16*19   # store XOR of HashKey^6 <<1 mod poly here (for Karatsuba purposes)
+HashKey_7_k    = 16*20   # store XOR of HashKey^7 <<1 mod poly here (for Karatsuba purposes)
+HashKey_8_k    = 16*21   # store XOR of HashKey^8 <<1 mod poly here (for Karatsuba purposes)
 
 #define arg1 %rdi
 #define arg2 %rsi
@@ -342,49 +342,49 @@ VARIABLE_OFFSET = 16*8
 
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_k(arg1)
+        vmovdqa  \T1, HashKey_k(arg2)
 
         GHASH_MUL_AVX \T5, \HK, \T1, \T3, \T4, \T6, \T2  #  T5 = HashKey^2<<1 mod poly
-        vmovdqa  \T5, HashKey_2(arg1)                    #  [HashKey_2] = HashKey^2<<1 mod poly
+        vmovdqa  \T5, HashKey_2(arg2)                    #  [HashKey_2] = HashKey^2<<1 mod poly
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_2_k(arg1)
+        vmovdqa  \T1, HashKey_2_k(arg2)
 
         GHASH_MUL_AVX \T5, \HK, \T1, \T3, \T4, \T6, \T2  #  T5 = HashKey^3<<1 mod poly
-        vmovdqa  \T5, HashKey_3(arg1)
+        vmovdqa  \T5, HashKey_3(arg2)
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_3_k(arg1)
+        vmovdqa  \T1, HashKey_3_k(arg2)
 
         GHASH_MUL_AVX \T5, \HK, \T1, \T3, \T4, \T6, \T2  #  T5 = HashKey^4<<1 mod poly
-        vmovdqa  \T5, HashKey_4(arg1)
+        vmovdqa  \T5, HashKey_4(arg2)
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_4_k(arg1)
+        vmovdqa  \T1, HashKey_4_k(arg2)
 
         GHASH_MUL_AVX \T5, \HK, \T1, \T3, \T4, \T6, \T2  #  T5 = HashKey^5<<1 mod poly
-        vmovdqa  \T5, HashKey_5(arg1)
+        vmovdqa  \T5, HashKey_5(arg2)
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_5_k(arg1)
+        vmovdqa  \T1, HashKey_5_k(arg2)
 
         GHASH_MUL_AVX \T5, \HK, \T1, \T3, \T4, \T6, \T2  #  T5 = HashKey^6<<1 mod poly
-        vmovdqa  \T5, HashKey_6(arg1)
+        vmovdqa  \T5, HashKey_6(arg2)
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_6_k(arg1)
+        vmovdqa  \T1, HashKey_6_k(arg2)
 
         GHASH_MUL_AVX \T5, \HK, \T1, \T3, \T4, \T6, \T2  #  T5 = HashKey^7<<1 mod poly
-        vmovdqa  \T5, HashKey_7(arg1)
+        vmovdqa  \T5, HashKey_7(arg2)
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_7_k(arg1)
+        vmovdqa  \T1, HashKey_7_k(arg2)
 
         GHASH_MUL_AVX \T5, \HK, \T1, \T3, \T4, \T6, \T2  #  T5 = HashKey^8<<1 mod poly
-        vmovdqa  \T5, HashKey_8(arg1)
+        vmovdqa  \T5, HashKey_8(arg2)
         vpshufd  $0b01001110, \T5, \T1
         vpxor    \T5, \T1, \T1
-        vmovdqa  \T1, HashKey_8_k(arg1)
+        vmovdqa  \T1, HashKey_8_k(arg2)
 
 .endm
 
@@ -785,14 +785,14 @@ _initial_blocks_done\@:
 
         #######################################################################
 
-        vmovdqa         HashKey_8(arg1), \T5
+        vmovdqa         HashKey_8(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T2, \T4             # T4 = a1*b1
         vpclmulqdq      $0x00, \T5, \T2, \T7             # T7 = a0*b0
 
         vpshufd         $0b01001110, \T2, \T6
         vpxor           \T2, \T6, \T6
 
-        vmovdqa         HashKey_8_k(arg1), \T5
+        vmovdqa         HashKey_8_k(arg2), \T5
         vpclmulqdq      $0x00, \T5, \T6, \T6
 
                 vmovdqu 16*3(arg1), \T1
@@ -806,7 +806,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP2(%rsp), \T1
-        vmovdqa         HashKey_7(arg1), \T5
+        vmovdqa         HashKey_7(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
         vpclmulqdq      $0x00, \T5, \T1, \T3
@@ -814,7 +814,7 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \T1, \T3
         vpxor           \T1, \T3, \T3
-        vmovdqa         HashKey_7_k(arg1), \T5
+        vmovdqa         HashKey_7_k(arg2), \T5
         vpclmulqdq      $0x10, \T5, \T3, \T3
         vpxor           \T3, \T6, \T6
 
@@ -831,7 +831,7 @@ _initial_blocks_done\@:
         #######################################################################
 
         vmovdqa         TMP3(%rsp), \T1
-        vmovdqa         HashKey_6(arg1), \T5
+        vmovdqa         HashKey_6(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
         vpclmulqdq      $0x00, \T5, \T1, \T3
@@ -839,7 +839,7 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \T1, \T3
         vpxor           \T1, \T3, \T3
-        vmovdqa         HashKey_6_k(arg1), \T5
+        vmovdqa         HashKey_6_k(arg2), \T5
         vpclmulqdq      $0x10, \T5, \T3, \T3
         vpxor           \T3, \T6, \T6
 
@@ -854,7 +854,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP4(%rsp), \T1
-        vmovdqa         HashKey_5(arg1), \T5
+        vmovdqa         HashKey_5(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
         vpclmulqdq      $0x00, \T5, \T1, \T3
@@ -862,7 +862,7 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \T1, \T3
         vpxor           \T1, \T3, \T3
-        vmovdqa         HashKey_5_k(arg1), \T5
+        vmovdqa         HashKey_5_k(arg2), \T5
         vpclmulqdq      $0x10, \T5, \T3, \T3
         vpxor           \T3, \T6, \T6
 
@@ -878,7 +878,7 @@ _initial_blocks_done\@:
 
 
         vmovdqa         TMP5(%rsp), \T1
-        vmovdqa         HashKey_4(arg1), \T5
+        vmovdqa         HashKey_4(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
         vpclmulqdq      $0x00, \T5, \T1, \T3
@@ -886,7 +886,7 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \T1, \T3
         vpxor           \T1, \T3, \T3
-        vmovdqa         HashKey_4_k(arg1), \T5
+        vmovdqa         HashKey_4_k(arg2), \T5
         vpclmulqdq      $0x10, \T5, \T3, \T3
         vpxor           \T3, \T6, \T6
 
@@ -901,7 +901,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP6(%rsp), \T1
-        vmovdqa         HashKey_3(arg1), \T5
+        vmovdqa         HashKey_3(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
         vpclmulqdq      $0x00, \T5, \T1, \T3
@@ -909,7 +909,7 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \T1, \T3
         vpxor           \T1, \T3, \T3
-        vmovdqa         HashKey_3_k(arg1), \T5
+        vmovdqa         HashKey_3_k(arg2), \T5
         vpclmulqdq      $0x10, \T5, \T3, \T3
         vpxor           \T3, \T6, \T6
 
@@ -925,7 +925,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP7(%rsp), \T1
-        vmovdqa         HashKey_2(arg1), \T5
+        vmovdqa         HashKey_2(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
         vpclmulqdq      $0x00, \T5, \T1, \T3
@@ -933,7 +933,7 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \T1, \T3
         vpxor           \T1, \T3, \T3
-        vmovdqa         HashKey_2_k(arg1), \T5
+        vmovdqa         HashKey_2_k(arg2), \T5
         vpclmulqdq      $0x10, \T5, \T3, \T3
         vpxor           \T3, \T6, \T6
 
@@ -950,7 +950,7 @@ _initial_blocks_done\@:
                 vaesenc \T5, \XMM8, \XMM8
 
         vmovdqa         TMP8(%rsp), \T1
-        vmovdqa         HashKey(arg1), \T5
+        vmovdqa         HashKey(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
         vpclmulqdq      $0x00, \T5, \T1, \T3
@@ -958,7 +958,7 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \T1, \T3
         vpxor           \T1, \T3, \T3
-        vmovdqa         HashKey_k(arg1), \T5
+        vmovdqa         HashKey_k(arg2), \T5
         vpclmulqdq      $0x10, \T5, \T3, \T3
         vpxor           \T3, \T6, \T6
 
@@ -1057,25 +1057,25 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \XMM1, \T2
         vpxor           \XMM1, \T2, \T2
-        vmovdqa         HashKey_8(arg1), \T5
+        vmovdqa         HashKey_8(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM1, \T6
         vpclmulqdq      $0x00, \T5, \XMM1, \T7
 
-        vmovdqa         HashKey_8_k(arg1), \T3
+        vmovdqa         HashKey_8_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \XMM1
 
         ######################
 
         vpshufd         $0b01001110, \XMM2, \T2
         vpxor           \XMM2, \T2, \T2
-        vmovdqa         HashKey_7(arg1), \T5
+        vmovdqa         HashKey_7(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM2, \T4
         vpxor           \T4, \T6, \T6
 
         vpclmulqdq      $0x00, \T5, \XMM2, \T4
         vpxor           \T4, \T7, \T7
 
-        vmovdqa         HashKey_7_k(arg1), \T3
+        vmovdqa         HashKey_7_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \T2
         vpxor           \T2, \XMM1, \XMM1
 
@@ -1083,14 +1083,14 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \XMM3, \T2
         vpxor           \XMM3, \T2, \T2
-        vmovdqa         HashKey_6(arg1), \T5
+        vmovdqa         HashKey_6(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM3, \T4
         vpxor           \T4, \T6, \T6
 
         vpclmulqdq      $0x00, \T5, \XMM3, \T4
         vpxor           \T4, \T7, \T7
 
-        vmovdqa         HashKey_6_k(arg1), \T3
+        vmovdqa         HashKey_6_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \T2
         vpxor           \T2, \XMM1, \XMM1
 
@@ -1098,14 +1098,14 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \XMM4, \T2
         vpxor           \XMM4, \T2, \T2
-        vmovdqa         HashKey_5(arg1), \T5
+        vmovdqa         HashKey_5(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM4, \T4
         vpxor           \T4, \T6, \T6
 
         vpclmulqdq      $0x00, \T5, \XMM4, \T4
         vpxor           \T4, \T7, \T7
 
-        vmovdqa         HashKey_5_k(arg1), \T3
+        vmovdqa         HashKey_5_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \T2
         vpxor           \T2, \XMM1, \XMM1
 
@@ -1113,14 +1113,14 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \XMM5, \T2
         vpxor           \XMM5, \T2, \T2
-        vmovdqa         HashKey_4(arg1), \T5
+        vmovdqa         HashKey_4(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM5, \T4
         vpxor           \T4, \T6, \T6
 
         vpclmulqdq      $0x00, \T5, \XMM5, \T4
         vpxor           \T4, \T7, \T7
 
-        vmovdqa         HashKey_4_k(arg1), \T3
+        vmovdqa         HashKey_4_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \T2
         vpxor           \T2, \XMM1, \XMM1
 
@@ -1128,14 +1128,14 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \XMM6, \T2
         vpxor           \XMM6, \T2, \T2
-        vmovdqa         HashKey_3(arg1), \T5
+        vmovdqa         HashKey_3(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM6, \T4
         vpxor           \T4, \T6, \T6
 
         vpclmulqdq      $0x00, \T5, \XMM6, \T4
         vpxor           \T4, \T7, \T7
 
-        vmovdqa         HashKey_3_k(arg1), \T3
+        vmovdqa         HashKey_3_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \T2
         vpxor           \T2, \XMM1, \XMM1
 
@@ -1143,14 +1143,14 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \XMM7, \T2
         vpxor           \XMM7, \T2, \T2
-        vmovdqa         HashKey_2(arg1), \T5
+        vmovdqa         HashKey_2(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM7, \T4
         vpxor           \T4, \T6, \T6
 
         vpclmulqdq      $0x00, \T5, \XMM7, \T4
         vpxor           \T4, \T7, \T7
 
-        vmovdqa         HashKey_2_k(arg1), \T3
+        vmovdqa         HashKey_2_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \T2
         vpxor           \T2, \XMM1, \XMM1
 
@@ -1158,14 +1158,14 @@ _initial_blocks_done\@:
 
         vpshufd         $0b01001110, \XMM8, \T2
         vpxor           \XMM8, \T2, \T2
-        vmovdqa         HashKey(arg1), \T5
+        vmovdqa         HashKey(arg2), \T5
         vpclmulqdq      $0x11, \T5, \XMM8, \T4
         vpxor           \T4, \T6, \T6
 
         vpclmulqdq      $0x00, \T5, \XMM8, \T4
         vpxor           \T4, \T7, \T7
 
-        vmovdqa         HashKey_k(arg1), \T3
+        vmovdqa         HashKey_k(arg2), \T3
         vpclmulqdq      $0x00, \T3, \T2, \T2
 
         vpxor           \T2, \XMM1, \XMM1
@@ -1232,7 +1232,7 @@ _initial_blocks_done\@:
         and     $~63, %rsp                  # align rsp to 64 bytes
 
 
-        vmovdqu  HashKey(arg1), %xmm13      # xmm13 = HashKey
+        vmovdqu  HashKey(arg2), %xmm13      # xmm13 = HashKey
 
         mov     arg5, %r13                  # save the number of bytes of plaintext/ciphertext
         and     $-16, %r13                  # r13 = r13 - (r13 mod 16)
@@ -1564,7 +1564,7 @@ ENTRY(aesni_gcm_precomp_avx_gen2)
         vpand    POLY(%rip), %xmm2, %xmm2
         vpxor    %xmm2, %xmm6, %xmm6        # xmm6 holds the HashKey<<1 mod poly
         #######################################################################
-        vmovdqa  %xmm6, HashKey(arg1)       # store HashKey<<1 mod poly
+        vmovdqa  %xmm6, HashKey(arg2)       # store HashKey<<1 mod poly
 
 
         PRECOMPUTE_AVX  %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5
@@ -1674,25 +1674,25 @@ ENDPROC(aesni_gcm_dec_avx_gen2)
         # Haskey_i_k holds XORed values of the low and high parts of the Haskey_i
         vmovdqa  \HK, \T5
         GHASH_MUL_AVX2 \T5, \HK, \T1, \T3, \T4, \T6, \T2    #  T5 = HashKey^2<<1 mod poly
-        vmovdqa  \T5, HashKey_2(arg1)                       #  [HashKey_2] = HashKey^2<<1 mod poly
+        vmovdqa  \T5, HashKey_2(arg2)                       #  [HashKey_2] = HashKey^2<<1 mod poly
 
         GHASH_MUL_AVX2 \T5, \HK, \T1, \T3, \T4, \T6, \T2    #  T5 = HashKey^3<<1 mod poly
-        vmovdqa  \T5, HashKey_3(arg1)
+        vmovdqa  \T5, HashKey_3(arg2)
 
         GHASH_MUL_AVX2 \T5, \HK, \T1, \T3, \T4, \T6, \T2    #  T5 = HashKey^4<<1 mod poly
-        vmovdqa  \T5, HashKey_4(arg1)
+        vmovdqa  \T5, HashKey_4(arg2)
 
         GHASH_MUL_AVX2 \T5, \HK, \T1, \T3, \T4, \T6, \T2    #  T5 = HashKey^5<<1 mod poly
-        vmovdqa  \T5, HashKey_5(arg1)
+        vmovdqa  \T5, HashKey_5(arg2)
 
         GHASH_MUL_AVX2 \T5, \HK, \T1, \T3, \T4, \T6, \T2    #  T5 = HashKey^6<<1 mod poly
-        vmovdqa  \T5, HashKey_6(arg1)
+        vmovdqa  \T5, HashKey_6(arg2)
 
         GHASH_MUL_AVX2 \T5, \HK, \T1, \T3, \T4, \T6, \T2    #  T5 = HashKey^7<<1 mod poly
-        vmovdqa  \T5, HashKey_7(arg1)
+        vmovdqa  \T5, HashKey_7(arg2)
 
         GHASH_MUL_AVX2 \T5, \HK, \T1, \T3, \T4, \T6, \T2    #  T5 = HashKey^8<<1 mod poly
-        vmovdqa  \T5, HashKey_8(arg1)
+        vmovdqa  \T5, HashKey_8(arg2)
 
 .endm
 
@@ -2100,7 +2100,7 @@ _initial_blocks_done\@:
 
         #######################################################################
 
-        vmovdqa         HashKey_8(arg1), \T5
+        vmovdqa         HashKey_8(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T2, \T4              # T4 = a1*b1
         vpclmulqdq      $0x00, \T5, \T2, \T7              # T7 = a0*b0
         vpclmulqdq      $0x01, \T5, \T2, \T6              # T6 = a1*b0
@@ -2118,7 +2118,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP2(%rsp), \T1
-        vmovdqa         HashKey_7(arg1), \T5
+        vmovdqa         HashKey_7(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
 
@@ -2144,7 +2144,7 @@ _initial_blocks_done\@:
         #######################################################################
 
         vmovdqa         TMP3(%rsp), \T1
-        vmovdqa         HashKey_6(arg1), \T5
+        vmovdqa         HashKey_6(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
 
@@ -2168,7 +2168,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP4(%rsp), \T1
-        vmovdqa         HashKey_5(arg1), \T5
+        vmovdqa         HashKey_5(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
 
@@ -2193,7 +2193,7 @@ _initial_blocks_done\@:
 
 
         vmovdqa         TMP5(%rsp), \T1
-        vmovdqa         HashKey_4(arg1), \T5
+        vmovdqa         HashKey_4(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
 
@@ -2217,7 +2217,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP6(%rsp), \T1
-        vmovdqa         HashKey_3(arg1), \T5
+        vmovdqa         HashKey_3(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
 
@@ -2241,7 +2241,7 @@ _initial_blocks_done\@:
                 vaesenc \T1, \XMM8, \XMM8
 
         vmovdqa         TMP7(%rsp), \T1
-        vmovdqa         HashKey_2(arg1), \T5
+        vmovdqa         HashKey_2(arg2), \T5
         vpclmulqdq      $0x11, \T5, \T1, \T3
         vpxor           \T3, \T4, \T4
 
@@ -2268,7 +2268,7 @@ _initial_blocks_done\@:
                 vaesenc \T5, \XMM8, \XMM8
 
         vmovdqa         TMP8(%rsp), \T1
-        vmovdqa         HashKey(arg1), \T5
+        vmovdqa         HashKey(arg2), \T5
 
         vpclmulqdq      $0x00, \T5, \T1, \T3
         vpxor           \T3, \T7, \T7
@@ -2365,7 +2365,7 @@ _initial_blocks_done\@:
 
         ## Karatsuba Method
 
-        vmovdqa         HashKey_8(arg1), \T5
+        vmovdqa         HashKey_8(arg2), \T5
 
         vpshufd         $0b01001110, \XMM1, \T2
         vpshufd         $0b01001110, \T5, \T3
@@ -2379,7 +2379,7 @@ _initial_blocks_done\@:
 
         ######################
 
-        vmovdqa         HashKey_7(arg1), \T5
+        vmovdqa         HashKey_7(arg2), \T5
         vpshufd         $0b01001110, \XMM2, \T2
         vpshufd         $0b01001110, \T5, \T3
         vpxor           \XMM2, \T2, \T2
@@ -2397,7 +2397,7 @@ _initial_blocks_done\@:
 
         ######################
 
-        vmovdqa         HashKey_6(arg1), \T5
+        vmovdqa         HashKey_6(arg2), \T5
         vpshufd         $0b01001110, \XMM3, \T2
         vpshufd         $0b01001110, \T5, \T3
         vpxor           \XMM3, \T2, \T2
@@ -2415,7 +2415,7 @@ _initial_blocks_done\@:
 
         ######################
 
-        vmovdqa         HashKey_5(arg1), \T5
+        vmovdqa         HashKey_5(arg2), \T5
         vpshufd         $0b01001110, \XMM4, \T2
         vpshufd         $0b01001110, \T5, \T3
         vpxor           \XMM4, \T2, \T2
@@ -2433,7 +2433,7 @@ _initial_blocks_done\@:
 
         ######################
 
-        vmovdqa         HashKey_4(arg1), \T5
+        vmovdqa         HashKey_4(arg2), \T5
         vpshufd         $0b01001110, \XMM5, \T2
         vpshufd         $0b01001110, \T5, \T3
         vpxor           \XMM5, \T2, \T2
@@ -2451,7 +2451,7 @@ _initial_blocks_done\@:
 
         ######################
 
-        vmovdqa         HashKey_3(arg1), \T5
+        vmovdqa         HashKey_3(arg2), \T5
         vpshufd         $0b01001110, \XMM6, \T2
         vpshufd         $0b01001110, \T5, \T3
         vpxor           \XMM6, \T2, \T2
@@ -2469,7 +2469,7 @@ _initial_blocks_done\@:
 
         ######################
 
-        vmovdqa         HashKey_2(arg1), \T5
+        vmovdqa         HashKey_2(arg2), \T5
         vpshufd         $0b01001110, \XMM7, \T2
         vpshufd         $0b01001110, \T5, \T3
         vpxor           \XMM7, \T2, \T2
@@ -2487,7 +2487,7 @@ _initial_blocks_done\@:
 
         ######################
 
-        vmovdqa         HashKey(arg1), \T5
+        vmovdqa         HashKey(arg2), \T5
         vpshufd         $0b01001110, \XMM8, \T2
         vpshufd         $0b01001110, \T5, \T3
         vpxor           \XMM8, \T2, \T2
@@ -2560,7 +2560,7 @@ _initial_blocks_done\@:
         and     $~63, %rsp                         # align rsp to 64 bytes
 
 
-        vmovdqu  HashKey(arg1), %xmm13             # xmm13 = HashKey
+        vmovdqu  HashKey(arg2), %xmm13             # xmm13 = HashKey
 
         mov     arg5, %r13                         # save the number of bytes of plaintext/ciphertext
         and     $-16, %r13                         # r13 = r13 - (r13 mod 16)
@@ -2891,7 +2891,7 @@ ENTRY(aesni_gcm_precomp_avx_gen4)
         vpand    POLY(%rip), %xmm2, %xmm2
         vpxor    %xmm2, %xmm6, %xmm6          # xmm6 holds the HashKey<<1 mod poly
         #######################################################################
-        vmovdqa  %xmm6, HashKey(arg1)         # store HashKey<<1 mod poly
+        vmovdqa  %xmm6, HashKey(arg2)         # store HashKey<<1 mod poly
 
 
         PRECOMPUTE_AVX2  %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5
