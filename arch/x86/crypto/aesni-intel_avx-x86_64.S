@@ -268,6 +268,30 @@ VARIABLE_OFFSET = 16*8
 # Utility Macros
 ################################
 
+.macro FUNC_SAVE
+        #the number of pushes must equal STACK_OFFSET
+        push    %r12
+        push    %r13
+        push    %r14
+        push    %r15
+
+        mov     %rsp, %r14
+
+
+
+        sub     $VARIABLE_OFFSET, %rsp
+        and     $~63, %rsp                    # align rsp to 64 bytes
+.endm
+
+.macro FUNC_RESTORE
+        mov     %r14, %rsp
+
+        pop     %r15
+        pop     %r14
+        pop     %r13
+        pop     %r12
+.endm
+
 # Encryption of a single block
 .macro ENCRYPT_SINGLE_BLOCK XMM0
                 vpxor    (arg1), \XMM0, \XMM0
@@ -1216,22 +1240,6 @@ _initial_blocks_done\@:
 # clobbering all xmm registers
 # clobbering r10, r11, r12, r13, r14, r15
 .macro  GCM_ENC_DEC_AVX     ENC_DEC
-
-        #the number of pushes must equal STACK_OFFSET
-        push    %r12
-        push    %r13
-        push    %r14
-        push    %r15
-
-        mov     %rsp, %r14
-
-
-
-
-        sub     $VARIABLE_OFFSET, %rsp
-        and     $~63, %rsp                  # align rsp to 64 bytes
-
-
         vmovdqu  HashKey(arg2), %xmm13      # xmm13 = HashKey
 
         mov     arg5, %r13                  # save the number of bytes of plaintext/ciphertext
@@ -1518,12 +1526,6 @@ _T_16\@:
         vmovdqu %xmm9, (%r10)
 
 _return_T_done\@:
-        mov     %r14, %rsp
-
-        pop     %r15
-        pop     %r14
-        pop     %r13
-        pop     %r12
 .endm
 
 
@@ -1534,18 +1536,7 @@ _return_T_done\@:
 #        u8     *hash_subkey)# /* H, the Hash sub key input. Data starts on a 16-byte boundary. */
 #############################################################
 ENTRY(aesni_gcm_precomp_avx_gen2)
-        #the number of pushes must equal STACK_OFFSET
-        push    %r12
-        push    %r13
-        push    %r14
-        push    %r15
-
-        mov     %rsp, %r14
-
-
-
-        sub     $VARIABLE_OFFSET, %rsp
-        and     $~63, %rsp                  # align rsp to 64 bytes
+        FUNC_SAVE
 
         vmovdqu  (arg3), %xmm6              # xmm6 = HashKey
 
@@ -1569,12 +1560,7 @@ ENTRY(aesni_gcm_precomp_avx_gen2)
 
         PRECOMPUTE_AVX  %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5
 
-        mov     %r14, %rsp
-
-        pop     %r15
-        pop     %r14
-        pop     %r13
-        pop     %r12
+        FUNC_RESTORE
         ret
 ENDPROC(aesni_gcm_precomp_avx_gen2)
 
@@ -1596,7 +1582,9 @@ ENDPROC(aesni_gcm_precomp_avx_gen2)
 #				Valid values are 16 (most likely), 12 or 8. */
 ###############################################################################
 ENTRY(aesni_gcm_enc_avx_gen2)
+        FUNC_SAVE
         GCM_ENC_DEC_AVX     ENC
+        FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc_avx_gen2)
 
@@ -1618,7 +1606,9 @@ ENDPROC(aesni_gcm_enc_avx_gen2)
 #				Valid values are 16 (most likely), 12 or 8. */
 ###############################################################################
 ENTRY(aesni_gcm_dec_avx_gen2)
+        FUNC_SAVE
         GCM_ENC_DEC_AVX     DEC
+        FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_dec_avx_gen2)
 #endif /* CONFIG_AS_AVX */
@@ -2544,22 +2534,6 @@ _initial_blocks_done\@:
 # clobbering all xmm registers
 # clobbering r10, r11, r12, r13, r14, r15
 .macro  GCM_ENC_DEC_AVX2     ENC_DEC
-
-        #the number of pushes must equal STACK_OFFSET
-        push    %r12
-        push    %r13
-        push    %r14
-        push    %r15
-
-        mov     %rsp, %r14
-
-
-
-
-        sub     $VARIABLE_OFFSET, %rsp
-        and     $~63, %rsp                         # align rsp to 64 bytes
-
-
         vmovdqu  HashKey(arg2), %xmm13             # xmm13 = HashKey
 
         mov     arg5, %r13                         # save the number of bytes of plaintext/ciphertext
@@ -2844,12 +2818,6 @@ _T_16\@:
         vmovdqu %xmm9, (%r10)
 
 _return_T_done\@:
-        mov     %r14, %rsp
-
-        pop     %r15
-        pop     %r14
-        pop     %r13
-        pop     %r12
 .endm
 
 
@@ -2861,18 +2829,7 @@ _return_T_done\@:
 #				Data starts on a 16-byte boundary. */
 #############################################################
 ENTRY(aesni_gcm_precomp_avx_gen4)
-        #the number of pushes must equal STACK_OFFSET
-        push    %r12
-        push    %r13
-        push    %r14
-        push    %r15
-
-        mov     %rsp, %r14
-
-
-
-        sub     $VARIABLE_OFFSET, %rsp
-        and     $~63, %rsp                    # align rsp to 64 bytes
+        FUNC_SAVE
 
         vmovdqu  (arg3), %xmm6                # xmm6 = HashKey
 
@@ -2896,12 +2853,7 @@ ENTRY(aesni_gcm_precomp_avx_gen4)
 
         PRECOMPUTE_AVX2  %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5
 
-        mov     %r14, %rsp
-
-        pop     %r15
-        pop     %r14
-        pop     %r13
-        pop     %r12
+        FUNC_RESTORE
         ret
 ENDPROC(aesni_gcm_precomp_avx_gen4)
 
@@ -2924,7 +2876,9 @@ ENDPROC(aesni_gcm_precomp_avx_gen4)
 #				Valid values are 16 (most likely), 12 or 8. */
 ###############################################################################
 ENTRY(aesni_gcm_enc_avx_gen4)
+        FUNC_SAVE
         GCM_ENC_DEC_AVX2     ENC
+        FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_enc_avx_gen4)
 
@@ -2946,7 +2900,9 @@ ENDPROC(aesni_gcm_enc_avx_gen4)
 #				Valid values are 16 (most likely), 12 or 8. */
 ###############################################################################
 ENTRY(aesni_gcm_dec_avx_gen4)
+        FUNC_SAVE
         GCM_ENC_DEC_AVX2     DEC
+        FUNC_RESTORE
 	ret
 ENDPROC(aesni_gcm_dec_avx_gen4)
 
