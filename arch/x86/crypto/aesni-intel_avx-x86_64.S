@@ -1252,6 +1252,74 @@ _initial_blocks_done\@:
 
 .endm
 
+# GCM_COMPLETE Finishes update of tag of last partial block
+# Output: Authorization Tag (AUTH_TAG)
+# Clobbers rax, r10-r12, and xmm0, xmm1, xmm5-xmm15
+.macro GCM_COMPLETE REP
+        mov     arg8, %r12                           # r12 = aadLen (number of bytes)
+        shl     $3, %r12                             # convert into number of bits
+        vmovd   %r12d, %xmm15                        # len(A) in xmm15
+
+        shl     $3, arg5                             # len(C) in bits  (*128)
+        vmovq   arg5, %xmm1
+        vpslldq $8, %xmm15, %xmm15                   # xmm15 = len(A)|| 0x0000000000000000
+        vpxor   %xmm1, %xmm15, %xmm15                # xmm15 = len(A)||len(C)
+
+        vpxor   %xmm15, %xmm14, %xmm14
+        GHASH_MUL_AVX       %xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6    # final GHASH computation
+        vpshufb SHUF_MASK(%rip), %xmm14, %xmm14      # perform a 16Byte swap
+
+        mov     arg6, %rax                           # rax = *Y0
+        vmovdqu (%rax), %xmm9                        # xmm9 = Y0
+
+        ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Y0)
+
+        vpxor   %xmm14, %xmm9, %xmm9
+
+_return_T\@:
+        mov     arg9, %r10              # r10 = authTag
+        mov     arg10, %r11              # r11 = auth_tag_len
+
+        cmp     $16, %r11
+        je      _T_16\@
+
+        cmp     $8, %r11
+        jl      _T_4\@
+
+_T_8\@:
+        vmovq   %xmm9, %rax
+        mov     %rax, (%r10)
+        add     $8, %r10
+        sub     $8, %r11
+        vpsrldq $8, %xmm9, %xmm9
+        cmp     $0, %r11
+        je     _return_T_done\@
+_T_4\@:
+        vmovd   %xmm9, %eax
+        mov     %eax, (%r10)
+        add     $4, %r10
+        sub     $4, %r11
+        vpsrldq     $4, %xmm9, %xmm9
+        cmp     $0, %r11
+        je     _return_T_done\@
+_T_123\@:
+        vmovd     %xmm9, %eax
+        cmp     $2, %r11
+        jl     _T_1\@
+        mov     %ax, (%r10)
+        cmp     $2, %r11
+        je     _return_T_done\@
+        add     $2, %r10
+        sar     $16, %eax
+_T_1\@:
+        mov     %al, (%r10)
+        jmp     _return_T_done\@
+
+_T_16\@:
+        vmovdqu %xmm9, (%r10)
+
+_return_T_done\@:
+.endm
 
 # combined for GCM encrypt and decrypt functions
 # clobbering all xmm registers
@@ -1478,71 +1546,7 @@ _less_than_8_bytes_left\@:
         #############################
 
 _multiple_of_16_bytes\@:
-        mov     arg8, %r12                           # r12 = aadLen (number of bytes)
-        shl     $3, %r12                             # convert into number of bits
-        vmovd   %r12d, %xmm15                        # len(A) in xmm15
-
-        shl     $3, arg5                             # len(C) in bits  (*128)
-        vmovq   arg5, %xmm1
-        vpslldq $8, %xmm15, %xmm15                   # xmm15 = len(A)|| 0x0000000000000000
-        vpxor   %xmm1, %xmm15, %xmm15                # xmm15 = len(A)||len(C)
-
-        vpxor   %xmm15, %xmm14, %xmm14
-        GHASH_MUL_AVX       %xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6    # final GHASH computation
-        vpshufb SHUF_MASK(%rip), %xmm14, %xmm14      # perform a 16Byte swap
-
-        mov     arg6, %rax                           # rax = *Y0
-        vmovdqu (%rax), %xmm9                        # xmm9 = Y0
-
-        ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Y0)
-
-        vpxor   %xmm14, %xmm9, %xmm9
-
-
-
-_return_T\@:
-        mov     arg9, %r10              # r10 = authTag
-        mov     arg10, %r11              # r11 = auth_tag_len
-
-        cmp     $16, %r11
-        je      _T_16\@
-
-        cmp     $8, %r11
-        jl      _T_4\@
-
-_T_8\@:
-        vmovq   %xmm9, %rax
-        mov     %rax, (%r10)
-        add     $8, %r10
-        sub     $8, %r11
-        vpsrldq $8, %xmm9, %xmm9
-        cmp     $0, %r11
-        je     _return_T_done\@
-_T_4\@:
-        vmovd   %xmm9, %eax
-        mov     %eax, (%r10)
-        add     $4, %r10
-        sub     $4, %r11
-        vpsrldq     $4, %xmm9, %xmm9
-        cmp     $0, %r11
-        je     _return_T_done\@
-_T_123\@:
-        vmovd     %xmm9, %eax
-        cmp     $2, %r11
-        jl     _T_1\@
-        mov     %ax, (%r10)
-        cmp     $2, %r11
-        je     _return_T_done\@
-        add     $2, %r10
-        sar     $16, %eax
-_T_1\@:
-        mov     %al, (%r10)
-        jmp     _return_T_done\@
-
-_T_16\@:
-        vmovdqu %xmm9, (%r10)
-
-_return_T_done\@:
+        GCM_COMPLETE \REP
 .endm
 
 
@@ -2590,7 +2594,73 @@ _initial_blocks_done\@:
         vpxor           \T4, \T6, \T6              # the result is in T6
 .endm
 
+.macro GCM_COMPLETE_AVX2 REP
+        mov     arg8, %r12                           # r12 = aadLen (number of bytes)
+        shl     $3, %r12                             # convert into number of bits
+        vmovd   %r12d, %xmm15                        # len(A) in xmm15
 
+        shl     $3, arg5                             # len(C) in bits  (*128)
+        vmovq   arg5, %xmm1
+        vpslldq $8, %xmm15, %xmm15                   # xmm15 = len(A)|| 0x0000000000000000
+        vpxor   %xmm1, %xmm15, %xmm15                # xmm15 = len(A)||len(C)
+
+        vpxor   %xmm15, %xmm14, %xmm14
+        GHASH_MUL_AVX2       %xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6    # final GHASH computation
+        vpshufb SHUF_MASK(%rip), %xmm14, %xmm14              # perform a 16Byte swap
+
+        mov     arg6, %rax                           # rax = *Y0
+        vmovdqu (%rax), %xmm9                        # xmm9 = Y0
+
+        ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Y0)
+
+        vpxor   %xmm14, %xmm9, %xmm9
+
+
+
+_return_T\@:
+        mov     arg9, %r10              # r10 = authTag
+        mov     arg10, %r11              # r11 = auth_tag_len
+
+        cmp     $16, %r11
+        je      _T_16\@
+
+        cmp     $8, %r11
+        jl      _T_4\@
+
+_T_8\@:
+        vmovq   %xmm9, %rax
+        mov     %rax, (%r10)
+        add     $8, %r10
+        sub     $8, %r11
+        vpsrldq $8, %xmm9, %xmm9
+        cmp     $0, %r11
+        je     _return_T_done\@
+_T_4\@:
+        vmovd   %xmm9, %eax
+        mov     %eax, (%r10)
+        add     $4, %r10
+        sub     $4, %r11
+        vpsrldq     $4, %xmm9, %xmm9
+        cmp     $0, %r11
+        je     _return_T_done\@
+_T_123\@:
+        vmovd     %xmm9, %eax
+        cmp     $2, %r11
+        jl     _T_1\@
+        mov     %ax, (%r10)
+        cmp     $2, %r11
+        je     _return_T_done\@
+        add     $2, %r10
+        sar     $16, %eax
+_T_1\@:
+        mov     %al, (%r10)
+        jmp     _return_T_done\@
+
+_T_16\@:
+        vmovdqu %xmm9, (%r10)
+
+_return_T_done\@:
+.endm
 
 # combined for GCM encrypt and decrypt functions
 # clobbering all xmm registers
@@ -2815,71 +2885,7 @@ _less_than_8_bytes_left\@:
         #############################
 
 _multiple_of_16_bytes\@:
-        mov     arg8, %r12                           # r12 = aadLen (number of bytes)
-        shl     $3, %r12                             # convert into number of bits
-        vmovd   %r12d, %xmm15                        # len(A) in xmm15
-
-        shl     $3, arg5                             # len(C) in bits  (*128)
-        vmovq   arg5, %xmm1
-        vpslldq $8, %xmm15, %xmm15                   # xmm15 = len(A)|| 0x0000000000000000
-        vpxor   %xmm1, %xmm15, %xmm15                # xmm15 = len(A)||len(C)
-
-        vpxor   %xmm15, %xmm14, %xmm14
-        GHASH_MUL_AVX2       %xmm14, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6    # final GHASH computation
-        vpshufb SHUF_MASK(%rip), %xmm14, %xmm14              # perform a 16Byte swap
-
-        mov     arg6, %rax                           # rax = *Y0
-        vmovdqu (%rax), %xmm9                        # xmm9 = Y0
-
-        ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Y0)
-
-        vpxor   %xmm14, %xmm9, %xmm9
-
-
-
-_return_T\@:
-        mov     arg9, %r10              # r10 = authTag
-        mov     arg10, %r11              # r11 = auth_tag_len
-
-        cmp     $16, %r11
-        je      _T_16\@
-
-        cmp     $8, %r11
-        jl      _T_4\@
-
-_T_8\@:
-        vmovq   %xmm9, %rax
-        mov     %rax, (%r10)
-        add     $8, %r10
-        sub     $8, %r11
-        vpsrldq $8, %xmm9, %xmm9
-        cmp     $0, %r11
-        je     _return_T_done\@
-_T_4\@:
-        vmovd   %xmm9, %eax
-        mov     %eax, (%r10)
-        add     $4, %r10
-        sub     $4, %r11
-        vpsrldq     $4, %xmm9, %xmm9
-        cmp     $0, %r11
-        je     _return_T_done\@
-_T_123\@:
-        vmovd     %xmm9, %eax
-        cmp     $2, %r11
-        jl     _T_1\@
-        mov     %ax, (%r10)
-        cmp     $2, %r11
-        je     _return_T_done\@
-        add     $2, %r10
-        sar     $16, %eax
-_T_1\@:
-        mov     %al, (%r10)
-        jmp     _return_T_done\@
-
-_T_16\@:
-        vmovdqu %xmm9, (%r10)
-
-_return_T_done\@:
+        GCM_COMPLETE_AVX2 \REP
 .endm
 
 
