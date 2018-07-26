@@ -203,6 +203,14 @@ aad_shift_arr:
 #        u8 shifted_hkey_8_k[16] store XOR HashKey^8 <<1 mod poly here (for Karatsuba purposes)
 #} gcm_ctx#
 
+#define AadHash 16*0
+#define AadLen 16*1
+#define InLen (16*1)+8
+#define PBlockEncKey 16*2
+#define OrigIV 16*3
+#define CurCount 16*4
+#define PBlockLen 16*5
+
 HashKey        = 16*6   # store HashKey <<1 mod poly here
 HashKey_2      = 16*7   # store HashKey^2 <<1 mod poly here
 HashKey_3      = 16*8   # store HashKey^3 <<1 mod poly here
@@ -413,43 +421,33 @@ VARIABLE_OFFSET = 16*8
 
 .endm
 
-## if a = number of total plaintext bytes
-## b = floor(a/16)
-## num_initial_blocks = b mod 4#
-## encrypt the initial num_initial_blocks blocks and apply ghash on the ciphertext
-## r10, r11, r12, rax are clobbered
-## arg1, arg3, arg4, r14 are used as a pointer only, not modified
+.macro CALC_AAD_HASH AAD AADLEN T1 T2 T3 T4 T5 T6 T7 T8
 
-.macro INITIAL_BLOCKS_AVX REP num_initial_blocks T1 T2 T3 T4 T5 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T6 T_key ENC_DEC
-	i = (8-\num_initial_blocks)
-	j = 0
-	setreg
-
-	mov     arg7, %r10                      # r10 = AAD
-	mov     arg8, %r12                      # r12 = aadLen
+	mov     \AAD, %r10                      # r10 = AAD
+	mov     \AADLEN, %r12                      # r12 = aadLen
 
 
 	mov     %r12, %r11
 
-	vpxor   reg_j, reg_j, reg_j
-	vpxor   reg_i, reg_i, reg_i
+	vpxor   \T8, \T8, \T8
+	vpxor   \T7, \T7, \T7
 	cmp     $16, %r11
 	jl      _get_AAD_rest8\@
 _get_AAD_blocks\@:
-	vmovdqu (%r10), reg_i
-	vpshufb SHUF_MASK(%rip), reg_i, reg_i
-	vpxor   reg_i, reg_j, reg_j
-	GHASH_MUL_AVX       reg_j, \T2, \T1, \T3, \T4, \T5, \T6
+	vmovdqu (%r10), \T7
+	vpshufb SHUF_MASK(%rip), \T7, \T7
+	vpxor   \T7, \T8, \T8
+	GHASH_MUL_AVX       \T8, \T2, \T1, \T3, \T4, \T5, \T6
 	add     $16, %r10
 	sub     $16, %r12
 	sub     $16, %r11
 	cmp     $16, %r11
 	jge     _get_AAD_blocks\@
-	vmovdqu reg_j, reg_i
+	vmovdqu \T8, \T7
 	cmp     $0, %r11
 	je      _get_AAD_done\@
 
-	vpxor   reg_i, reg_i, reg_i
+	vpxor   \T7, \T7, \T7
 
 	/* read the last <16B of AAD. since we have at least 4B of
 	data right after the AAD (the ICV, and maybe some CT), we can
@@ -461,8 +459,8 @@ _get_AAD_rest8\@:
 	add     $8, %r10
 	sub     $8, %r11
 	vpslldq $8, \T1, \T1
-	vpsrldq $8, reg_i, reg_i
-	vpxor   \T1, reg_i, reg_i
+	vpsrldq $8, \T7, \T7
+	vpxor   \T1, \T7, \T7
 	jmp     _get_AAD_rest8\@
 _get_AAD_rest4\@:
 	cmp     $0, %r11
@@ -472,22 +470,37 @@ _get_AAD_rest4\@:
 	add     $4, %r10
 	sub     $4, %r11
 	vpslldq $12, \T1, \T1
-	vpsrldq $4, reg_i, reg_i
-	vpxor   \T1, reg_i, reg_i
+	vpsrldq $4, \T7, \T7
+	vpxor   \T1, \T7, \T7
 _get_AAD_rest0\@:
 	/* finalize: shift out the extra bytes we read, and align
 	left. since pslldq can only shift by an immediate, we use
 	vpshufb and an array of shuffle masks */
 	movq    %r12, %r11
 	salq    $4, %r11
-	movdqu  aad_shift_arr(%r11), \T1
-	vpshufb \T1, reg_i, reg_i
+	vmovdqu  aad_shift_arr(%r11), \T1
+	vpshufb \T1, \T7, \T7
 _get_AAD_rest_final\@:
-	vpshufb SHUF_MASK(%rip), reg_i, reg_i
-	vpxor   reg_j, reg_i, reg_i
-	GHASH_MUL_AVX       reg_i, \T2, \T1, \T3, \T4, \T5, \T6
+	vpshufb SHUF_MASK(%rip), \T7, \T7
+	vpxor   \T8, \T7, \T7
+	GHASH_MUL_AVX       \T7, \T2, \T1, \T3, \T4, \T5, \T6
 
 _get_AAD_done\@:
+        vmovdqu \T7, AadHash(arg2)
+.endm
+
+## if a = number of total plaintext bytes
+## b = floor(a/16)
+## num_initial_blocks = b mod 4#
+## encrypt the initial num_initial_blocks blocks and apply ghash on the ciphertext
+## r10, r11, r12, rax are clobbered
+## arg1, arg3, arg4, r14 are used as a pointer only, not modified
+
+.macro INITIAL_BLOCKS_AVX REP num_initial_blocks T1 T2 T3 T4 T5 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T6 T_key ENC_DEC
+	i = (8-\num_initial_blocks)
+	setreg
+        vmovdqu AadHash(arg2), reg_i
+
 	# initialize the data pointer offset as zero
 	xor     %r11, %r11
 
@@ -1554,7 +1567,13 @@ _multiple_of_16_bytes\@:
 #void   aesni_gcm_precomp_avx_gen2
 #        (gcm_data     *my_ctx_data,
 #         gcm_context_data *data,
-#        u8     *hash_subkey)# /* H, the Hash sub key input. Data starts on a 16-byte boundary. */
+#        u8     *hash_subkey# /* H, the Hash sub key input. Data starts on a 16-byte boundary. */
+#        u8      *iv, /* Pre-counter block j0: 4 byte salt
+#			(from Security Association) concatenated with 8 byte
+#			Initialisation Vector (from IPSec ESP Payload)
+#			concatenated with 0x00000001. 16-byte aligned pointer. */
+#        const   u8 *aad, /* Additional Authentication Data (AAD)*/
+#        u64     aad_len) /* Length of AAD in bytes. With RFC4106 this is going to be 8 or 12 Bytes */
 #############################################################
 ENTRY(aesni_gcm_precomp_avx_gen2)
         FUNC_SAVE
@@ -1578,6 +1597,8 @@ ENTRY(aesni_gcm_precomp_avx_gen2)
         #######################################################################
         vmovdqa  %xmm6, HashKey(arg2)       # store HashKey<<1 mod poly
 
+
+        CALC_AAD_HASH arg5 arg6 %xmm2 %xmm6 %xmm3 %xmm4 %xmm5 %xmm7 %xmm1 %xmm0
 
         PRECOMPUTE_AVX  %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5
 
@@ -1736,44 +1757,33 @@ ENDPROC(aesni_gcm_dec_avx_gen2)
 .endm
 
 
-## if a = number of total plaintext bytes
-## b = floor(a/16)
-## num_initial_blocks = b mod 4#
-## encrypt the initial num_initial_blocks blocks and apply ghash on the ciphertext
-## r10, r11, r12, rax are clobbered
-## arg1, arg3, arg4, r14 are used as a pointer only, not modified
+.macro CALC_AAD_HASH_AVX2 AAD AADLEN T1 T2 T3 T4 T5 T6 T7 T8
 
-.macro INITIAL_BLOCKS_AVX2 REP num_initial_blocks T1 T2 T3 T4 T5 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T6 T_key ENC_DEC VER
-	i = (8-\num_initial_blocks)
-	j = 0
-	setreg
-
-	mov     arg7, %r10                       # r10 = AAD
-	mov     arg8, %r12                       # r12 = aadLen
+	mov     \AAD, %r10                      # r10 = AAD
+	mov     \AADLEN, %r12                      # r12 = aadLen
 
 
 	mov     %r12, %r11
 
-	vpxor   reg_j, reg_j, reg_j
-	vpxor   reg_i, reg_i, reg_i
-
+	vpxor   \T8, \T8, \T8
+	vpxor   \T7, \T7, \T7
 	cmp     $16, %r11
 	jl      _get_AAD_rest8\@
 _get_AAD_blocks\@:
-	vmovdqu (%r10), reg_i
-	vpshufb SHUF_MASK(%rip), reg_i, reg_i
-	vpxor   reg_i, reg_j, reg_j
-	GHASH_MUL_AVX2      reg_j, \T2, \T1, \T3, \T4, \T5, \T6
+	vmovdqu (%r10), \T7
+	vpshufb SHUF_MASK(%rip), \T7, \T7
+	vpxor   \T7, \T8, \T8
+	GHASH_MUL_AVX2       \T8, \T2, \T1, \T3, \T4, \T5, \T6
 	add     $16, %r10
 	sub     $16, %r12
 	sub     $16, %r11
 	cmp     $16, %r11
 	jge     _get_AAD_blocks\@
-	vmovdqu reg_j, reg_i
+	vmovdqu \T8, \T7
 	cmp     $0, %r11
 	je      _get_AAD_done\@
 
-	vpxor   reg_i, reg_i, reg_i
+	vpxor   \T7, \T7, \T7
 
 	/* read the last <16B of AAD. since we have at least 4B of
 	data right after the AAD (the ICV, and maybe some CT), we can
@@ -1785,33 +1795,48 @@ _get_AAD_rest8\@:
 	add     $8, %r10
 	sub     $8, %r11
 	vpslldq $8, \T1, \T1
-	vpsrldq $8, reg_i, reg_i
-	vpxor   \T1, reg_i, reg_i
+	vpsrldq $8, \T7, \T7
+	vpxor   \T1, \T7, \T7
 	jmp     _get_AAD_rest8\@
 _get_AAD_rest4\@:
 	cmp     $0, %r11
-	jle     _get_AAD_rest0\@
+	jle      _get_AAD_rest0\@
 	mov     (%r10), %eax
 	movq    %rax, \T1
 	add     $4, %r10
 	sub     $4, %r11
 	vpslldq $12, \T1, \T1
-	vpsrldq $4, reg_i, reg_i
-	vpxor   \T1, reg_i, reg_i
+	vpsrldq $4, \T7, \T7
+	vpxor   \T1, \T7, \T7
 _get_AAD_rest0\@:
 	/* finalize: shift out the extra bytes we read, and align
 	left. since pslldq can only shift by an immediate, we use
 	vpshufb and an array of shuffle masks */
 	movq    %r12, %r11
 	salq    $4, %r11
-	movdqu  aad_shift_arr(%r11), \T1
-	vpshufb \T1, reg_i, reg_i
+	vmovdqu  aad_shift_arr(%r11), \T1
+	vpshufb \T1, \T7, \T7
 _get_AAD_rest_final\@:
-	vpshufb SHUF_MASK(%rip), reg_i, reg_i
-	vpxor   reg_j, reg_i, reg_i
-	GHASH_MUL_AVX2      reg_i, \T2, \T1, \T3, \T4, \T5, \T6
+	vpshufb SHUF_MASK(%rip), \T7, \T7
+	vpxor   \T8, \T7, \T7
+	GHASH_MUL_AVX2       \T7, \T2, \T1, \T3, \T4, \T5, \T6
 
 _get_AAD_done\@:
+        vmovdqu \T7, AadHash(arg2)
+.endm
+
+## if a = number of total plaintext bytes
+## b = floor(a/16)
+## num_initial_blocks = b mod 4#
+## encrypt the initial num_initial_blocks blocks and apply ghash on the ciphertext
+## r10, r11, r12, rax are clobbered
+## arg1, arg3, arg4, r14 are used as a pointer only, not modified
+
+.macro INITIAL_BLOCKS_AVX2 REP num_initial_blocks T1 T2 T3 T4 T5 CTR XMM1 XMM2 XMM3 XMM4 XMM5 XMM6 XMM7 XMM8 T6 T_key ENC_DEC VER
+	i = (8-\num_initial_blocks)
+	setreg
+        vmovdqu AadHash(arg2), reg_i
+
 	# initialize the data pointer offset as zero
 	xor     %r11, %r11
 
@@ -2893,8 +2918,13 @@ _multiple_of_16_bytes\@:
 #void   aesni_gcm_precomp_avx_gen4
 #        (gcm_data     *my_ctx_data,
 #         gcm_context_data *data,
-#        u8     *hash_subkey)# /* H, the Hash sub key input.
-#				Data starts on a 16-byte boundary. */
+#        u8     *hash_subkey# /* H, the Hash sub key input. Data starts on a 16-byte boundary. */
+#        u8      *iv, /* Pre-counter block j0: 4 byte salt
+#			(from Security Association) concatenated with 8 byte
+#			Initialisation Vector (from IPSec ESP Payload)
+#			concatenated with 0x00000001. 16-byte aligned pointer. */
+#        const   u8 *aad, /* Additional Authentication Data (AAD)*/
+#        u64     aad_len) /* Length of AAD in bytes. With RFC4106 this is going to be 8 or 12 Bytes */
 #############################################################
 ENTRY(aesni_gcm_precomp_avx_gen4)
         FUNC_SAVE
@@ -2918,6 +2948,7 @@ ENTRY(aesni_gcm_precomp_avx_gen4)
         #######################################################################
         vmovdqa  %xmm6, HashKey(arg2)         # store HashKey<<1 mod poly
 
+        CALC_AAD_HASH_AVX2 arg5 arg6 %xmm2 %xmm6 %xmm3 %xmm4 %xmm5 %xmm7 %xmm1 %xmm0
 
         PRECOMPUTE_AVX2  %xmm6, %xmm0, %xmm1, %xmm2, %xmm3, %xmm4, %xmm5
 
