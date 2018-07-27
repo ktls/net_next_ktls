@@ -1471,37 +1471,6 @@ _zero_cipher_left\@:
         vmovdqu %xmm14, AadHash(arg2)
         vmovdqu %xmm9, CurCount(arg2)
 
-        cmp     $16, arg5
-        jl      _only_less_than_16\@
-
-        mov     arg5, %r13
-        and     $15, %r13                            # r13 = (arg5 mod 16)
-
-        je      _multiple_of_16_bytes\@
-
-        mov %r13, PBlockLen(arg2)
-
-        # handle the last <16 Byte block seperately
-        vpaddd   ONE(%rip), %xmm9, %xmm9             # INCR CNT to get Yn
-        vmovdqu %xmm9, CurCount(arg2)
-        vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
-
-        ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Yn)
-        vmovdqu %xmm9, PBlockEncKey(arg2)
-
-        sub     $16, %r11
-        add     %r13, %r11
-        vmovdqu (arg4, %r11), %xmm1                  # receive the last <16 Byte block
-
-        lea     SHIFT_MASK+16(%rip), %r12
-        sub     %r13, %r12                           # adjust the shuffle mask pointer to be
-						     # able to shift 16-r13 bytes (r13 is the
-						     # number of bytes in plaintext mod 16)
-        vmovdqu (%r12), %xmm2                        # get the appropriate shuffle mask
-        vpshufb %xmm2, %xmm1, %xmm1                  # shift right 16-r13 bytes
-        jmp     _final_ghash_mul\@
-
-_only_less_than_16\@:
         # check for 0 length
         mov     arg5, %r13
         and     $15, %r13                            # r13 = (arg5 mod 16)
@@ -1509,28 +1478,48 @@ _only_less_than_16\@:
         je      _multiple_of_16_bytes\@
 
         # handle the last <16 Byte block seperately
+        mov %r13, PBlockLen(arg2)
 
 
         vpaddd  ONE(%rip), %xmm9, %xmm9              # INCR CNT to get Yn
+	vmovdqu %xmm9, CurCount(arg2)
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
         ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Yn)
         vmovdqu %xmm9, PBlockEncKey(arg2)
 
+        cmp $16, arg5
+        jge _large_enough_update\@
+
+	lea (arg4,%r11,1), %r10
+	mov %r13, %r12
+
+	READ_PARTIAL_BLOCK %r10 %r12 %xmm2 %xmm1
+
         lea     SHIFT_MASK+16(%rip), %r12
         sub     %r13, %r12                           # adjust the shuffle mask pointer to be
 						     # able to shift 16-r13 bytes (r13 is the
-						     # number of bytes in plaintext mod 16)
+	# number of bytes in plaintext mod 16)
 
-_get_last_16_byte_loop\@:
-        movb    (arg4, %r11),  %al
-        movb    %al,  TMP1 (%rsp , %r11)
-        add     $1, %r11
-        cmp     %r13,  %r11
-        jne     _get_last_16_byte_loop\@
+        jmp _final_ghash_mul\@
 
-        vmovdqu  TMP1(%rsp), %xmm1
+_large_enough_update\@:
+        sub $16, %r11
+        add %r13, %r11
 
-        sub     $16, %r11
+	# receive the last <16 Byte block
+	vmovdqu	(arg4, %r11, 1), %xmm1
+
+	sub	%r13, %r11
+	add	$16, %r11
+
+	lea	SHIFT_MASK+16(%rip), %r12
+	# adjust the shuffle mask pointer to be able to shift 16-r13 bytes
+	# (r13 is the number of bytes in plaintext mod 16)
+	sub	%r13, %r12
+	# get the appropriate shuffle mask
+	vmovdqu	(%r12), %xmm2
+	# shift right 16-r13 bytes
+	vpshufb  %xmm2, %xmm1, %xmm1
 
 _final_ghash_mul\@:
         .if  \ENC_DEC ==  DEC
@@ -1544,8 +1533,6 @@ _final_ghash_mul\@:
         vpxor   %xmm2, %xmm14, %xmm14
 
         vmovdqu %xmm14, AadHash(arg2)
-        sub     %r13, %r11
-        add     $16, %r11
         .else
         vpxor   %xmm1, %xmm9, %xmm9                  # Plaintext XOR E(K, Yn)
         vmovdqu ALL_F-SHIFT_MASK(%r12), %xmm1        # get the appropriate mask to
@@ -1555,8 +1542,6 @@ _final_ghash_mul\@:
         vpxor   %xmm9, %xmm14, %xmm14
 
         vmovdqu %xmm14, AadHash(arg2)
-        sub     %r13, %r11
-        add     $16, %r11
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9        # shuffle xmm9 back to output as ciphertext
         .endif
 
@@ -2829,37 +2814,6 @@ _eight_cipher_left\@:
 _zero_cipher_left\@:
         vmovdqu %xmm14, AadHash(arg2)
         vmovdqu %xmm9, CurCount(arg2)
-
-        cmp     $16, arg5
-        jl      _only_less_than_16\@
-
-        mov     arg5, %r13
-        and     $15, %r13                            # r13 = (arg5 mod 16)
-
-        je      _multiple_of_16_bytes\@
-
-        mov %r13, PBlockLen(arg2)
-
-        # handle the last <16 Byte block seperately
-        vpaddd   ONE(%rip), %xmm9, %xmm9             # INCR CNT to get Yn
-        vmovdqu %xmm9, CurCount(arg2)
-        vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
-        ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Yn)
-        vmovdqu %xmm9, PBlockEncKey(arg2)
-
-        sub     $16, %r11
-        add     %r13, %r11
-        vmovdqu (arg4, %r11), %xmm1                  # receive the last <16 Byte block
-
-        lea     SHIFT_MASK+16(%rip), %r12
-        sub     %r13, %r12                           # adjust the shuffle mask pointer
-						     # to be able to shift 16-r13 bytes
-						     # (r13 is the number of bytes in plaintext mod 16)
-        vmovdqu (%r12), %xmm2                        # get the appropriate shuffle mask
-        vpshufb %xmm2, %xmm1, %xmm1                  # shift right 16-r13 bytes
-        jmp     _final_ghash_mul\@
-
-_only_less_than_16\@:
         # check for 0 length
         mov     arg5, %r13
         and     $15, %r13                            # r13 = (arg5 mod 16)
@@ -2867,29 +2821,48 @@ _only_less_than_16\@:
         je      _multiple_of_16_bytes\@
 
         # handle the last <16 Byte block seperately
-
+        mov %r13, PBlockLen(arg2)
 
         vpaddd  ONE(%rip), %xmm9, %xmm9              # INCR CNT to get Yn
+        vmovdqu %xmm9, CurCount(arg2)
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9
         ENCRYPT_SINGLE_BLOCK    \REP, %xmm9                # E(K, Yn)
 
         vmovdqu %xmm9, PBlockEncKey(arg2)
+
+        cmp $16, arg5
+        jge _large_enough_update\@
+
+       lea (arg4,%r11,1), %r10
+       mov %r13, %r12
+
+       READ_PARTIAL_BLOCK %r10 %r12 %xmm2 %xmm1
+
 
         lea     SHIFT_MASK+16(%rip), %r12
         sub     %r13, %r12                           # adjust the shuffle mask pointer to be
 						     # able to shift 16-r13 bytes (r13 is the
 						     # number of bytes in plaintext mod 16)
 
-_get_last_16_byte_loop\@:
-        movb    (arg4, %r11),  %al
-        movb    %al,  TMP1 (%rsp , %r11)
-        add     $1, %r11
-        cmp     %r13,  %r11
-        jne     _get_last_16_byte_loop\@
+        jmp _final_ghash_mul\@
+_large_enough_update\@:
+        sub $16, %r11
+        add %r13, %r11
 
-        vmovdqu  TMP1(%rsp), %xmm1
+       # receive the last <16 Byte block
+       vmovdqu (arg4, %r11, 1), %xmm1
 
-        sub     $16, %r11
+       sub     %r13, %r11
+       add     $16, %r11
+
+       lea     SHIFT_MASK+16(%rip), %r12
+       # adjust the shuffle mask pointer to be able to shift 16-r13 bytes
+       # (r13 is the number of bytes in plaintext mod 16)
+       sub     %r13, %r12
+       # get the appropriate shuffle mask
+       vmovdqu (%r12), %xmm2
+       # shift right 16-r13 bytes
+       vpshufb  %xmm2, %xmm1, %xmm1
 
 _final_ghash_mul\@:
         .if  \ENC_DEC ==  DEC
@@ -2902,8 +2875,6 @@ _final_ghash_mul\@:
         vpxor   %xmm2, %xmm14, %xmm14
 
         vmovdqu %xmm14, AadHash(arg2)
-        sub     %r13, %r11
-        add     $16, %r11
         .else
         vpxor   %xmm1, %xmm9, %xmm9                  # Plaintext XOR E(K, Yn)
         vmovdqu ALL_F-SHIFT_MASK(%r12), %xmm1        # get the appropriate mask to mask out top 16-r13 bytes of xmm9
@@ -2912,8 +2883,6 @@ _final_ghash_mul\@:
         vpxor   %xmm9, %xmm14, %xmm14
 
         vmovdqu %xmm14, AadHash(arg2)
-        sub     %r13, %r11
-        add     $16, %r11
         vpshufb SHUF_MASK(%rip), %xmm9, %xmm9        # shuffle xmm9 back to output as ciphertext
         .endif
 
