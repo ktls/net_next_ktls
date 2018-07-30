@@ -477,9 +477,6 @@ _get_AAD_done\@:
 	setreg
         vmovdqu AadHash(arg2), reg_i
 
-	# initialize the data pointer offset as zero
-	xor     %r11, %r11
-
 	# start AES for num_initial_blocks blocks
         vmovdqu CurCount(arg2), \CTR
 
@@ -1349,13 +1346,162 @@ _T_16\@:
 _return_T_done\@:
 .endm
 
-# combined for GCM encrypt and decrypt functions
+# PARTIAL_BLOCK: Handles encryption/decryption and the tag partial blocks
+# between update calls.
+# Requires the input data be at least 1 byte long due to READ_PARTIAL_BLOCK
+# Outputs encrypted bytes, and updates hash and partial info in gcm_data_context
+# Clobbers rax, r10, r12, r13, xmm0-6, xmm9-13
+.macro PARTIAL_BLOCK CYPH_PLAIN_OUT PLAIN_CYPH_IN PLAIN_CYPH_LEN DATA_OFFSET \
+	AAD_HASH operation
+	mov 	PBlockLen(arg2), %r13
+	cmp	$0, %r13
+	je	_partial_block_done_\@	# Leave Macro if no partial blocks
+	# Read in input data without over reading
+	cmp	$16, \PLAIN_CYPH_LEN
+	jl	_fewer_than_16_bytes_\@
+	movups	(\PLAIN_CYPH_IN), %xmm1	# If more than 16 bytes, just fill xmm
+	jmp	_data_read_\@
+
+_fewer_than_16_bytes_\@:
+	lea	(\PLAIN_CYPH_IN, \DATA_OFFSET, 1), %r10
+	mov	\PLAIN_CYPH_LEN, %r12
+	READ_PARTIAL_BLOCK %r10 %r12 %xmm0 %xmm1
+
+	mov PBlockLen(arg2), %r13
+
+_data_read_\@:				# Finished reading in data
+
+	movdqu	PBlockEncKey(arg2), %xmm9
+	movdqu	HashKey(arg2), %xmm13
+
+	lea	SHIFT_MASK(%rip), %r12
+
+	# adjust the shuffle mask pointer to be able to shift r13 bytes
+	# r16-r13 is the number of bytes in plaintext mod 16)
+	add	%r13, %r12
+	movdqu	(%r12), %xmm2		# get the appropriate shuffle mask
+	PSHUFB_XMM %xmm2, %xmm9		# shift right r13 bytes
+
+.ifc \operation, dec
+	movdqa	%xmm1, %xmm3
+	pxor	%xmm1, %xmm9		# Cyphertext XOR E(K, Yn)
+
+	mov	\PLAIN_CYPH_LEN, %r10
+	add	%r13, %r10
+	# Set r10 to be the amount of data left in CYPH_PLAIN_IN after filling
+	sub	$16, %r10
+	# Determine if if partial block is not being filled and
+	# shift mask accordingly
+	jge	_no_extra_mask_1_\@
+	sub	%r10, %r12
+_no_extra_mask_1_\@:
+
+	movdqu	ALL_F-SHIFT_MASK(%r12), %xmm1
+	# get the appropriate mask to mask out bottom r13 bytes of xmm9
+	pand	%xmm1, %xmm9		# mask out bottom r13 bytes of xmm9
+
+	pand	%xmm1, %xmm3
+	movdqa	SHUF_MASK(%rip), %xmm10
+	PSHUFB_XMM	%xmm10, %xmm3
+	PSHUFB_XMM	%xmm2, %xmm3
+	pxor	%xmm3, \AAD_HASH
+
+	cmp	$0, %r10
+	jl	_partial_incomplete_1_\@
+
+	# GHASH computation for the last <16 Byte block
+	GHASH_MUL_AVX \AAD_HASH, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6
+	xor	%rax,%rax
+
+	mov	%rax, PBlockLen(arg2)
+	jmp	_dec_done_\@
+_partial_incomplete_1_\@:
+	add	\PLAIN_CYPH_LEN, PBlockLen(arg2)
+_dec_done_\@:
+	movdqu	\AAD_HASH, AadHash(arg2)
+.else
+	pxor	%xmm1, %xmm9			# Plaintext XOR E(K, Yn)
+
+	mov	\PLAIN_CYPH_LEN, %r10
+	add	%r13, %r10
+	# Set r10 to be the amount of data left in CYPH_PLAIN_IN after filling
+	sub	$16, %r10
+	# Determine if if partial block is not being filled and
+	# shift mask accordingly
+	jge	_no_extra_mask_2_\@
+	sub	%r10, %r12
+_no_extra_mask_2_\@:
+
+	movdqu	ALL_F-SHIFT_MASK(%r12), %xmm1
+	# get the appropriate mask to mask out bottom r13 bytes of xmm9
+	pand	%xmm1, %xmm9
+
+	movdqa	SHUF_MASK(%rip), %xmm1
+	PSHUFB_XMM %xmm1, %xmm9
+	PSHUFB_XMM %xmm2, %xmm9
+	pxor	%xmm9, \AAD_HASH
+
+	cmp	$0, %r10
+	jl	_partial_incomplete_2_\@
+
+	# GHASH computation for the last <16 Byte block
+	GHASH_MUL_AVX \AAD_HASH, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6
+	xor	%rax,%rax
+
+	mov	%rax, PBlockLen(arg2)
+	jmp	_encode_done_\@
+_partial_incomplete_2_\@:
+	add	\PLAIN_CYPH_LEN, PBlockLen(arg2)
+_encode_done_\@:
+	movdqu	\AAD_HASH, AadHash(arg2)
+
+	movdqa	SHUF_MASK(%rip), %xmm10
+	# shuffle xmm9 back to output as ciphertext
+	PSHUFB_XMM	%xmm10, %xmm9
+	PSHUFB_XMM	%xmm2, %xmm9
+.endif
+	# output encrypted Bytes
+	cmp	$0, %r10
+	jl	_partial_fill_\@
+	mov	%r13, %r12
+	mov	$16, %r13
+	# Set r13 to be the number of bytes to write out
+	sub	%r12, %r13
+	jmp	_count_set_\@
+_partial_fill_\@:
+	mov	\PLAIN_CYPH_LEN, %r13
+_count_set_\@:
+	movdqa	%xmm9, %xmm0
+	MOVQ_R64_XMM	%xmm0, %rax
+	cmp	$8, %r13
+	jle	_less_than_8_bytes_left_\@
+
+	mov	%rax, (\CYPH_PLAIN_OUT, \DATA_OFFSET, 1)
+	add	$8, \DATA_OFFSET
+	psrldq	$8, %xmm0
+	MOVQ_R64_XMM	%xmm0, %rax
+	sub	$8, %r13
+_less_than_8_bytes_left_\@:
+	movb	%al, (\CYPH_PLAIN_OUT, \DATA_OFFSET, 1)
+	add	$1, \DATA_OFFSET
+	shr	$8, %rax
+	sub	$1, %r13
+	jne	_less_than_8_bytes_left_\@
+_partial_block_done_\@:
+.endm # PARTIAL_BLOCK
+
 # clobbering all xmm registers
 # clobbering r10, r11, r12, r13, r14, r15
 .macro  GCM_ENC_DEC_AVX     ENC_DEC REP
 	vmovdqu AadHash(arg2), %xmm8
         vmovdqu  HashKey(arg2), %xmm13      # xmm13 = HashKey
         add arg5, InLen(arg2)
+
+	# initialize the data pointer offset as zero
+	xor     %r11, %r11
+
+        PARTIAL_BLOCK arg3 arg4 arg5 %r11 %xmm8 ENC_DEC
+        sub %r11, arg5
 
         mov     arg5, %r13                  # save the number of bytes of plaintext/ciphertext
         and     $-16, %r13                  # r13 = r13 - (r13 mod 16)
@@ -1834,9 +1980,6 @@ _get_AAD_done\@:
 	i = (8-\num_initial_blocks)
 	setreg
         vmovdqu AadHash(arg2), reg_i
-
-	# initialize the data pointer offset as zero
-	xor     %r11, %r11
 
 	# start AES for num_initial_blocks blocks
         vmovdqu CurCount(arg2), \CTR
@@ -2693,6 +2836,150 @@ _T_16\@:
 _return_T_done\@:
 .endm
 
+# PARTIAL_BLOCK: Handles encryption/decryption and the tag partial blocks
+# between update calls.
+# Requires the input data be at least 1 byte long due to READ_PARTIAL_BLOCK
+# Outputs encrypted bytes, and updates hash and partial info in gcm_data_context
+# Clobbers rax, r10, r12, r13, xmm0-6, xmm9-13
+.macro PARTIAL_BLOCK_AVX2 CYPH_PLAIN_OUT PLAIN_CYPH_IN PLAIN_CYPH_LEN DATA_OFFSET \
+	AAD_HASH operation
+	mov 	PBlockLen(arg2), %r13
+	cmp	$0, %r13
+	je	_partial_block_done_\@	# Leave Macro if no partial blocks
+	# Read in input data without over reading
+	cmp	$16, \PLAIN_CYPH_LEN
+	jl	_fewer_than_16_bytes_\@
+	movups	(\PLAIN_CYPH_IN), %xmm1	# If more than 16 bytes, just fill xmm
+	jmp	_data_read_\@
+
+_fewer_than_16_bytes_\@:
+	lea	(\PLAIN_CYPH_IN, \DATA_OFFSET, 1), %r10
+	mov	\PLAIN_CYPH_LEN, %r12
+	READ_PARTIAL_BLOCK %r10 %r12 %xmm0 %xmm1
+
+	mov PBlockLen(arg2), %r13
+
+_data_read_\@:				# Finished reading in data
+
+	movdqu	PBlockEncKey(arg2), %xmm9
+	movdqu	HashKey(arg2), %xmm13
+
+	lea	SHIFT_MASK(%rip), %r12
+
+	# adjust the shuffle mask pointer to be able to shift r13 bytes
+	# r16-r13 is the number of bytes in plaintext mod 16)
+	add	%r13, %r12
+	movdqu	(%r12), %xmm2		# get the appropriate shuffle mask
+	PSHUFB_XMM %xmm2, %xmm9		# shift right r13 bytes
+
+.ifc \operation, dec
+	movdqa	%xmm1, %xmm3
+	pxor	%xmm1, %xmm9		# Cyphertext XOR E(K, Yn)
+
+	mov	\PLAIN_CYPH_LEN, %r10
+	add	%r13, %r10
+	# Set r10 to be the amount of data left in CYPH_PLAIN_IN after filling
+	sub	$16, %r10
+	# Determine if if partial block is not being filled and
+	# shift mask accordingly
+	jge	_no_extra_mask_1_\@
+	sub	%r10, %r12
+_no_extra_mask_1_\@:
+
+	movdqu	ALL_F-SHIFT_MASK(%r12), %xmm1
+	# get the appropriate mask to mask out bottom r13 bytes of xmm9
+	pand	%xmm1, %xmm9		# mask out bottom r13 bytes of xmm9
+
+	pand	%xmm1, %xmm3
+	movdqa	SHUF_MASK(%rip), %xmm10
+	PSHUFB_XMM	%xmm10, %xmm3
+	PSHUFB_XMM	%xmm2, %xmm3
+	pxor	%xmm3, \AAD_HASH
+
+	cmp	$0, %r10
+	jl	_partial_incomplete_1_\@
+
+	# GHASH computation for the last <16 Byte block
+	GHASH_MUL_AVX2 \AAD_HASH, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6
+	xor	%rax,%rax
+
+	mov	%rax, PBlockLen(arg2)
+	jmp	_dec_done_\@
+_partial_incomplete_1_\@:
+	add	\PLAIN_CYPH_LEN, PBlockLen(arg2)
+_dec_done_\@:
+	movdqu	\AAD_HASH, AadHash(arg2)
+.else
+	pxor	%xmm1, %xmm9			# Plaintext XOR E(K, Yn)
+
+	mov	\PLAIN_CYPH_LEN, %r10
+	add	%r13, %r10
+	# Set r10 to be the amount of data left in CYPH_PLAIN_IN after filling
+	sub	$16, %r10
+	# Determine if if partial block is not being filled and
+	# shift mask accordingly
+	jge	_no_extra_mask_2_\@
+	sub	%r10, %r12
+_no_extra_mask_2_\@:
+
+	movdqu	ALL_F-SHIFT_MASK(%r12), %xmm1
+	# get the appropriate mask to mask out bottom r13 bytes of xmm9
+	pand	%xmm1, %xmm9
+
+	movdqa	SHUF_MASK(%rip), %xmm1
+	PSHUFB_XMM %xmm1, %xmm9
+	PSHUFB_XMM %xmm2, %xmm9
+	pxor	%xmm9, \AAD_HASH
+
+	cmp	$0, %r10
+	jl	_partial_incomplete_2_\@
+
+	# GHASH computation for the last <16 Byte block
+	GHASH_MUL_AVX2 \AAD_HASH, %xmm13, %xmm0, %xmm10, %xmm11, %xmm5, %xmm6
+	xor	%rax,%rax
+
+	mov	%rax, PBlockLen(arg2)
+	jmp	_encode_done_\@
+_partial_incomplete_2_\@:
+	add	\PLAIN_CYPH_LEN, PBlockLen(arg2)
+_encode_done_\@:
+	movdqu	\AAD_HASH, AadHash(arg2)
+
+	movdqa	SHUF_MASK(%rip), %xmm10
+	# shuffle xmm9 back to output as ciphertext
+	PSHUFB_XMM	%xmm10, %xmm9
+	PSHUFB_XMM	%xmm2, %xmm9
+.endif
+	# output encrypted Bytes
+	cmp	$0, %r10
+	jl	_partial_fill_\@
+	mov	%r13, %r12
+	mov	$16, %r13
+	# Set r13 to be the number of bytes to write out
+	sub	%r12, %r13
+	jmp	_count_set_\@
+_partial_fill_\@:
+	mov	\PLAIN_CYPH_LEN, %r13
+_count_set_\@:
+	movdqa	%xmm9, %xmm0
+	MOVQ_R64_XMM	%xmm0, %rax
+	cmp	$8, %r13
+	jle	_less_than_8_bytes_left_\@
+
+	mov	%rax, (\CYPH_PLAIN_OUT, \DATA_OFFSET, 1)
+	add	$8, \DATA_OFFSET
+	psrldq	$8, %xmm0
+	MOVQ_R64_XMM	%xmm0, %rax
+	sub	$8, %r13
+_less_than_8_bytes_left_\@:
+	movb	%al, (\CYPH_PLAIN_OUT, \DATA_OFFSET, 1)
+	add	$1, \DATA_OFFSET
+	shr	$8, %rax
+	sub	$1, %r13
+	jne	_less_than_8_bytes_left_\@
+_partial_block_done_\@:
+.endm # PARTIAL_BLOCK
+
 # combined for GCM encrypt and decrypt functions
 # clobbering all xmm registers
 # clobbering r10, r11, r12, r13, r14, r15
@@ -2700,6 +2987,12 @@ _return_T_done\@:
         vmovdqu AadHash(arg2), %xmm8
         vmovdqu  HashKey(arg2), %xmm13             # xmm13 = HashKey
         add arg5, InLen(arg2)
+
+        # initialize the data pointer offset as zero
+        xor     %r11, %r11
+
+        PARTIAL_BLOCK_AVX2 arg3 arg4 arg5 %r11 %xmm8 ENC_DEC
+        sub %r11, arg5
 
         mov     arg5, %r13                         # save the number of bytes of plaintext/ciphertext
         and     $-16, %r13                         # r13 = r13 - (r13 mod 16)
