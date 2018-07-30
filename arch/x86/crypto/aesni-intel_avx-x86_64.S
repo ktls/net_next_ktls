@@ -432,7 +432,7 @@ VARIABLE_OFFSET = 16*8
 	vpxor   \T8, \T8, \T8
 	vpxor   \T7, \T7, \T7
 	cmp     $16, %r11
-	jl      _get_AAD_rest8\@
+	jl      _get_AAD_rest\@
 _get_AAD_blocks\@:
 	vmovdqu (%r10), \T7
 	vpshufb SHUF_MASK(%rip), \T7, \T7
@@ -444,43 +444,19 @@ _get_AAD_blocks\@:
 	cmp     $16, %r11
 	jge     _get_AAD_blocks\@
 	vmovdqu \T8, \T7
+
+	/* read the last <16B of AAD. since we have at least 4B of
+	data right after the AAD (the ICV, and maybe some CT), we can
+	read 4B/8B blocks safely, and then get rid of the extra stuff */
+_get_AAD_rest\@:
 	cmp     $0, %r11
 	je      _get_AAD_done\@
 
 	vpxor   \T7, \T7, \T7
 
-	/* read the last <16B of AAD. since we have at least 4B of
-	data right after the AAD (the ICV, and maybe some CT), we can
-	read 4B/8B blocks safely, and then get rid of the extra stuff */
-_get_AAD_rest8\@:
-	cmp     $4, %r11
-	jle     _get_AAD_rest4\@
-	movq    (%r10), \T1
-	add     $8, %r10
-	sub     $8, %r11
-	vpslldq $8, \T1, \T1
-	vpsrldq $8, \T7, \T7
-	vpxor   \T1, \T7, \T7
-	jmp     _get_AAD_rest8\@
-_get_AAD_rest4\@:
-	cmp     $0, %r11
-	jle      _get_AAD_rest0\@
-	mov     (%r10), %eax
-	movq    %rax, \T1
-	add     $4, %r10
-	sub     $4, %r11
-	vpslldq $12, \T1, \T1
-	vpsrldq $4, \T7, \T7
-	vpxor   \T1, \T7, \T7
-_get_AAD_rest0\@:
-	/* finalize: shift out the extra bytes we read, and align
-	left. since pslldq can only shift by an immediate, we use
-	vpshufb and an array of shuffle masks */
-	movq    %r12, %r11
-	salq    $4, %r11
-	vmovdqu  aad_shift_arr(%r11), \T1
-	vpshufb \T1, \T7, \T7
-_get_AAD_rest_final\@:
+	vmovdqu (%r10), \T7
+        READ_PARTIAL_BLOCK %r10, %r11, \T1, \T7
+
 	vpshufb SHUF_MASK(%rip), \T7, \T7
 	vpxor   \T8, \T7, \T7
 	GHASH_MUL_AVX       \T7, \T2, \T1, \T3, \T4, \T5, \T6
@@ -1262,6 +1238,37 @@ _initial_blocks_done\@:
 
 .endm
 
+# Reads DLEN bytes starting at DPTR and stores in XMMDst
+# where 0 < DLEN < 16
+# Clobbers %rax, DLEN and XMM1
+.macro READ_PARTIAL_BLOCK DPTR DLEN XMM1 XMMDst
+        cmp $8, \DLEN
+        jl _read_lt8_\@
+        mov (\DPTR), %rax
+        MOVQ_R64_XMM %rax, \XMMDst
+        sub $8, \DLEN
+        jz _done_read_partial_block_\@
+	xor %eax, %eax
+_read_next_byte_\@:
+        shl $8, %rax
+        mov 7(\DPTR, \DLEN, 1), %al
+        dec \DLEN
+        jnz _read_next_byte_\@
+        MOVQ_R64_XMM %rax, \XMM1
+	pslldq $8, \XMM1
+        por \XMM1, \XMMDst
+	jmp _done_read_partial_block_\@
+_read_lt8_\@:
+	xor %eax, %eax
+_read_next_byte_lt8_\@:
+        shl $8, %rax
+        mov -1(\DPTR, \DLEN, 1), %al
+        dec \DLEN
+        jnz _read_next_byte_lt8_\@
+        MOVQ_R64_XMM %rax, \XMMDst
+_done_read_partial_block_\@:
+.endm
+
 # GCM_COMPLETE Finishes update of tag of last partial block
 # Output: Authorization Tag (AUTH_TAG)
 # Clobbers rax, r10-r12, and xmm0, xmm1, xmm5-xmm15
@@ -1798,7 +1805,7 @@ ENDPROC(aesni_gcm_dec_avx_gen2)
 	vpxor   \T8, \T8, \T8
 	vpxor   \T7, \T7, \T7
 	cmp     $16, %r11
-	jl      _get_AAD_rest8\@
+	jl      _get_AAD_rest\@
 _get_AAD_blocks\@:
 	vmovdqu (%r10), \T7
 	vpshufb SHUF_MASK(%rip), \T7, \T7
@@ -1810,43 +1817,19 @@ _get_AAD_blocks\@:
 	cmp     $16, %r11
 	jge     _get_AAD_blocks\@
 	vmovdqu \T8, \T7
-	cmp     $0, %r11
-	je      _get_AAD_done\@
-
-	vpxor   \T7, \T7, \T7
 
 	/* read the last <16B of AAD. since we have at least 4B of
 	data right after the AAD (the ICV, and maybe some CT), we can
 	read 4B/8B blocks safely, and then get rid of the extra stuff */
-_get_AAD_rest8\@:
-	cmp     $4, %r11
-	jle     _get_AAD_rest4\@
-	movq    (%r10), \T1
-	add     $8, %r10
-	sub     $8, %r11
-	vpslldq $8, \T1, \T1
-	vpsrldq $8, \T7, \T7
-	vpxor   \T1, \T7, \T7
-	jmp     _get_AAD_rest8\@
-_get_AAD_rest4\@:
+_get_AAD_rest\@:
 	cmp     $0, %r11
-	jle      _get_AAD_rest0\@
-	mov     (%r10), %eax
-	movq    %rax, \T1
-	add     $4, %r10
-	sub     $4, %r11
-	vpslldq $12, \T1, \T1
-	vpsrldq $4, \T7, \T7
-	vpxor   \T1, \T7, \T7
-_get_AAD_rest0\@:
-	/* finalize: shift out the extra bytes we read, and align
-	left. since pslldq can only shift by an immediate, we use
-	vpshufb and an array of shuffle masks */
-	movq    %r12, %r11
-	salq    $4, %r11
-	vmovdqu  aad_shift_arr(%r11), \T1
-	vpshufb \T1, \T7, \T7
-_get_AAD_rest_final\@:
+        je      _get_AAD_done\@
+
+       vpxor   \T7, \T7, \T7
+
+       vmovdqu (%r10), \T7
+        READ_PARTIAL_BLOCK %r10, %r11, \T1, \T7
+
 	vpshufb SHUF_MASK(%rip), \T7, \T7
 	vpxor   \T8, \T7, \T7
 	GHASH_MUL_AVX2       \T7, \T2, \T1, \T3, \T4, \T5, \T6
