@@ -1841,6 +1841,10 @@ void tls_sw_free_resources_rx(struct sock *sk)
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context_rx *ctx = tls_sw_ctx_rx(tls_ctx);
 
+	smp_store_mb(ctx->async_notify, true);
+	if (atomic_read(&ctx->decrypt_pending))
+		crypto_wait_req(-EINPROGRESS, &ctx->async_wait);
+
 	tls_sw_release_resources_rx(sk);
 
 	kfree(ctx);
