@@ -1443,9 +1443,21 @@ static int decrypt_skb_update(struct sock *sk, struct sk_buff *skb,
 		while (content_type == 0) {
 			if (back > rxm->full_len)
 				return -EBADMSG;
-			err = skb_copy_bits(skb,
-					    rxm->offset + rxm->full_len - back,
-					    &content_type, 1);
+			if (*zc) {
+				iov_iter_revert(dest, 1);
+				err = copy_from_iter(&content_type, 1, dest);
+				if (err != 1)
+					return -EBADMSG;
+				iov_iter_revert(dest, 1);
+			} else {
+				err = skb_copy_bits(skb,
+						    rxm->offset +
+						      rxm->full_len -
+						      back,
+						    &content_type, 1);
+				if (err != 0)
+					return -EBADMSG;
+			}
 			if (content_type)
 				break;
 			sub++;
@@ -1580,7 +1592,6 @@ int tls_sw_recvmsg(struct sock *sk,
 			 */
 			if (!is_kvec && to_copy <= len &&
 			    ctx->control == TLS_RECORD_TYPE_DATA &&
-			    version != TLS_1_3_VERSION &&
 			    likely(!(flags & MSG_PEEK)))
 				zc = true;
 
@@ -1592,11 +1603,25 @@ int tls_sw_recvmsg(struct sock *sk,
 			}
 
 			if (err == -EINPROGRESS) {
+				if (version == TLS_1_3_VERSION) {
+					if (wait_for_pending_async(ctx)) {
+						tls_err_abort(sk, err);
+						copied = 0;
+						goto recv_end;
+					}
+					err = 0;
+					if (zc) {
+						iov_iter_revert(&msg->msg_iter,
+								1);
+						chunk -= 1;
+					}
+				}
 				async = true;
 				num_async++;
 				goto pick_next_record;
 			}
-
+			if (version == TLS_1_3_VERSION && zc)
+				chunk -= 1;
 			ctx->decrypted = true;
 		}
 
