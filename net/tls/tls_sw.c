@@ -805,8 +805,6 @@ int tls_sw_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 	long timeo = sock_sndtimeo(sk, msg->msg_flags & MSG_DONTWAIT);
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context_tx *ctx = tls_sw_ctx_tx(tls_ctx);
-	struct crypto_tfm *tfm = crypto_aead_tfm(ctx->aead_send);
-	bool async_capable = tfm->__crt_alg->cra_flags & CRYPTO_ALG_ASYNC;
 	unsigned char record_type = TLS_RECORD_TYPE_DATA;
 	bool is_kvec = iov_iter_is_kvec(&msg->msg_iter);
 	bool eor = !(msg->msg_flags & MSG_MORE);
@@ -890,7 +888,7 @@ alloc_encrypted:
 			full_record = true;
 		}
 
-		if (!is_kvec && (full_record || eor) && !async_capable) {
+		if (!is_kvec && (full_record || eor)) {
 			u32 first = msg_pl->sg.end;
 
 			ret = sk_msg_zerocopy_from_iter(sk, &msg->msg_iter,
