@@ -1499,27 +1499,11 @@ int tls_sw_recvmsg(struct sock *sk,
 
 		rxm = strp_msg(skb);
 
-		if (!cmsg) {
-			int cerr;
-
-			cerr = put_cmsg(msg, SOL_TLS, TLS_GET_RECORD_TYPE,
-					sizeof(ctx->control), &ctx->control);
-			cmsg = true;
-			control = ctx->control;
-			if (ctx->control != TLS_RECORD_TYPE_DATA) {
-				if (cerr || msg->msg_flags & MSG_CTRUNC) {
-					err = -EIO;
-					goto recv_end;
-				}
-			}
-		} else if (control != ctx->control) {
-			goto recv_end;
-		}
-
 		if (!ctx->decrypted) {
 			int to_copy = rxm->full_len - tls_ctx->rx.overhead_size;
 
 			if (!is_kvec && to_copy <= len &&
+			    ctx->control == TLS_RECORD_TYPE_DATA &&
 			    likely(!(flags & MSG_PEEK)))
 				zc = true;
 
@@ -1537,6 +1521,23 @@ int tls_sw_recvmsg(struct sock *sk,
 			}
 
 			ctx->decrypted = true;
+		}
+
+		if (!cmsg) {
+			int cerr;
+
+			cerr = put_cmsg(msg, SOL_TLS, TLS_GET_RECORD_TYPE,
+					sizeof(ctx->control), &ctx->control);
+			cmsg = true;
+			control = ctx->control;
+			if (ctx->control != TLS_RECORD_TYPE_DATA) {
+				if (cerr || msg->msg_flags & MSG_CTRUNC) {
+					err = -EIO;
+					goto recv_end;
+				}
+			}
+		} else if (control != ctx->control) {
+			goto recv_end;
 		}
 
 		if (!zc) {
@@ -1629,14 +1630,14 @@ ssize_t tls_sw_splice_read(struct socket *sock,  loff_t *ppos,
 	if (!skb)
 		goto splice_read_end;
 
-	/* splice does not support reading control messages */
-	if (ctx->control != TLS_RECORD_TYPE_DATA) {
-		err = -ENOTSUPP;
-		goto splice_read_end;
-	}
-
 	if (!ctx->decrypted) {
 		err = decrypt_skb_update(sk, skb, NULL, &chunk, &zc);
+
+		/* splice does not support reading control messages */
+		if (ctx->control != TLS_RECORD_TYPE_DATA) {
+			err = -ENOTSUPP;
+			goto splice_read_end;
+		}
 
 		if (err < 0) {
 			tls_err_abort(sk, EBADMSG);
