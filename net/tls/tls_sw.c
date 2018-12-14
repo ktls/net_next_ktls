@@ -1497,6 +1497,24 @@ static bool tls_sw_advance_skb(struct sock *sk, struct sk_buff *skb,
 	return true;
 }
 
+static int wait_for_pending_async(struct tls_sw_context_rx *ctx)
+{
+	int err = 0;
+
+	/* Wait for all previously submitted records to be decrypted */
+	smp_store_mb(ctx->async_notify, true);
+	if (atomic_read(&ctx->decrypt_pending)) {
+		err = crypto_wait_req(-EINPROGRESS, &ctx->async_wait);
+		if (err)
+			return err;
+	} else {
+		reinit_completion(&ctx->async_wait.completion);
+	}
+	WRITE_ONCE(ctx->async_notify, false);
+
+	return err;
+}
+
 int tls_sw_recvmsg(struct sock *sk,
 		   struct msghdr *msg,
 		   size_t len,
@@ -1645,19 +1663,11 @@ pick_next_record:
 
 recv_end:
 	if (num_async) {
-		/* Wait for all previously submitted records to be decrypted */
-		smp_store_mb(ctx->async_notify, true);
-		if (atomic_read(&ctx->decrypt_pending)) {
-			err = crypto_wait_req(-EINPROGRESS, &ctx->async_wait);
-			if (err) {
-				/* one of async decrypt failed */
-				tls_err_abort(sk, err);
-				copied = 0;
-			}
-		} else {
-			reinit_completion(&ctx->async_wait.completion);
+		if (wait_for_pending_async(ctx)) {
+			/* one of async decrypt failed */
+			tls_err_abort(sk, err);
+			copied = 0;
 		}
-		WRITE_ONCE(ctx->async_notify, false);
 	}
 
 	release_sock(sk);
